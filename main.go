@@ -1,3 +1,4 @@
+// Package main implements a Wake-on-LAN middleware plugin for Traefik.
 package main
 
 import (
@@ -10,19 +11,19 @@ import (
 	"time"
 )
 
-// Config holds the plugin configuration
+// Config holds the plugin configuration.
 type Config struct {
-	HealthCheck   string `json:"healthCheck,omitempty"`
-	MacAddress    string `json:"macAddress,omitempty"`
-	IPAddress     string `json:"ipAddress,omitempty"`
-	Port          string `json:"port,omitempty"`
-	Timeout       string `json:"timeout,omitempty"`
-	RetryAttempts string `json:"retryAttempts,omitempty"`
-	RetryInterval string `json:"retryInterval,omitempty"`
-	Debug         bool   `json:"debug,omitempty"`
+	HealthCheck   string `json:"healthCheck,omitempty" yaml:"healthCheck,omitempty"`
+	MacAddress    string `json:"macAddress,omitempty" yaml:"macAddress,omitempty"`
+	IPAddress     string `json:"ipAddress,omitempty" yaml:"ipAddress,omitempty"`
+	Port          string `json:"port,omitempty" yaml:"port,omitempty"`
+	Timeout       string `json:"timeout,omitempty" yaml:"timeout,omitempty"`
+	RetryAttempts string `json:"retryAttempts,omitempty" yaml:"retryAttempts,omitempty"`
+	RetryInterval string `json:"retryInterval,omitempty" yaml:"retryInterval,omitempty"`
+	Debug         bool   `json:"debug,omitempty" yaml:"debug,omitempty"`
 }
 
-// CreateConfig creates and initializes the plugin configuration
+// CreateConfig creates the default plugin configuration.
 func CreateConfig() *Config {
 	return &Config{
 		Port:          "9",
@@ -33,7 +34,7 @@ func CreateConfig() *Config {
 	}
 }
 
-// WOLPlugin holds the plugin instance
+// WOLPlugin is the main plugin struct.
 type WOLPlugin struct {
 	next          http.Handler
 	name          string
@@ -47,7 +48,7 @@ type WOLPlugin struct {
 	debug         bool
 }
 
-// New creates a new WOL plugin instance
+// New creates a new WOL plugin.
 func New(ctx context.Context, next http.Handler, config *Config, name string) (http.Handler, error) {
 	if config.HealthCheck == "" {
 		return nil, fmt.Errorf("healthCheck URL is required")
@@ -93,23 +94,23 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	}, nil
 }
 
-// ServeHTTP handles the HTTP request
+// ServeHTTP implements the http.Handler interface.
 func (w *WOLPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	if w.debug {
-		fmt.Printf("Custom WOL Plugin: Checking health for %s\n", w.healthCheck)
+		fmt.Printf("WOL Plugin [%s]: Checking health for %s\n", w.name, w.healthCheck)
 	}
 
 	if !w.isHealthy() {
-		fmt.Printf("Custom WOL Plugin: Service unhealthy, attempting to wake %s\n", w.macAddress)
+		fmt.Printf("WOL Plugin [%s]: Service unhealthy, attempting to wake %s\n", w.name, w.macAddress)
 		
 		success := false
 		for attempt := 1; attempt <= w.retryAttempts; attempt++ {
 			if w.debug {
-				fmt.Printf("Custom WOL Plugin: Wake attempt %d/%d\n", attempt, w.retryAttempts)
+				fmt.Printf("WOL Plugin [%s]: Wake attempt %d/%d\n", w.name, attempt, w.retryAttempts)
 			}
 
 			if err := w.sendWOLPacket(); err != nil {
-				fmt.Printf("Custom WOL Plugin: Failed to send WOL packet (attempt %d): %v\n", attempt, err)
+				fmt.Printf("WOL Plugin [%s]: Failed to send WOL packet (attempt %d): %v\n", w.name, attempt, err)
 				if attempt < w.retryAttempts {
 					time.Sleep(w.retryInterval)
 					continue
@@ -124,26 +125,25 @@ func (w *WOLPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			}
 
 			if attempt < w.retryAttempts {
-				fmt.Printf("Custom WOL Plugin: Service not responding, retrying in %v\n", w.retryInterval)
+				fmt.Printf("WOL Plugin [%s]: Service not responding, retrying in %v\n", w.name, w.retryInterval)
 				time.Sleep(w.retryInterval)
 			}
 		}
 
 		if !success {
-			fmt.Printf("Custom WOL Plugin: Service did not come online after %d attempts\n", w.retryAttempts)
+			fmt.Printf("WOL Plugin [%s]: Service did not come online after %d attempts\n", w.name, w.retryAttempts)
 			http.Error(rw, "Service did not respond after wake up attempts", http.StatusServiceUnavailable)
 			return
 		}
 
-		fmt.Printf("Custom WOL Plugin: Service is now online\n")
+		fmt.Printf("WOL Plugin [%s]: Service is now online\n", w.name)
 	} else if w.debug {
-		fmt.Printf("Custom WOL Plugin: Service is already healthy\n")
+		fmt.Printf("WOL Plugin [%s]: Service is already healthy\n", w.name)
 	}
 
 	w.next.ServeHTTP(rw, req)
 }
 
-// isHealthy checks if the target service is responding
 func (w *WOLPlugin) isHealthy() bool {
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -151,14 +151,20 @@ func (w *WOLPlugin) isHealthy() bool {
 
 	resp, err := client.Get(w.healthCheck)
 	if err != nil {
+		if w.debug {
+			fmt.Printf("WOL Plugin [%s]: Health check failed: %v\n", w.name, err)
+		}
 		return false
 	}
 	defer resp.Body.Close()
 
-	return resp.StatusCode >= 200 && resp.StatusCode < 300
+	healthy := resp.StatusCode >= 200 && resp.StatusCode < 300
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: Health check status: %d (healthy: %v)\n", w.name, resp.StatusCode, healthy)
+	}
+	return healthy
 }
 
-// sendWOLPacket sends a Wake-on-LAN magic packet
 func (w *WOLPlugin) sendWOLPacket() error {
 	macBytes, err := w.parseMACAddress(w.macAddress)
 	if err != nil {
@@ -184,12 +190,11 @@ func (w *WOLPlugin) sendWOLPacket() error {
 	}
 
 	if w.debug {
-		fmt.Printf("Custom WOL Plugin: Magic packet sent to %s (%s:%d)\n", w.macAddress, w.ipAddress, w.port)
+		fmt.Printf("WOL Plugin [%s]: Magic packet sent to %s (%s:%d)\n", w.name, w.macAddress, w.ipAddress, w.port)
 	}
 	return nil
 }
 
-// parseMACAddress parses a MAC address string into bytes
 func (w *WOLPlugin) parseMACAddress(macStr string) ([]byte, error) {
 	macStr = strings.ReplaceAll(macStr, ":", "")
 	macStr = strings.ReplaceAll(macStr, "-", "")
@@ -212,7 +217,6 @@ func (w *WOLPlugin) parseMACAddress(macStr string) ([]byte, error) {
 	return macBytes, nil
 }
 
-// createMagicPacket creates a WOL magic packet
 func (w *WOLPlugin) createMagicPacket(macBytes []byte) []byte {
 	packet := make([]byte, 102)
 
@@ -227,10 +231,9 @@ func (w *WOLPlugin) createMagicPacket(macBytes []byte) []byte {
 	return packet
 }
 
-// waitForService waits for the service to become healthy
 func (w *WOLPlugin) waitForService() bool {
 	if w.debug {
-		fmt.Printf("Custom WOL Plugin: Waiting for service to come online (timeout: %v)\n", w.timeout)
+		fmt.Printf("WOL Plugin [%s]: Waiting for service to come online (timeout: %v)\n", w.name, w.timeout)
 	}
 	
 	start := time.Now()
