@@ -3,9 +3,12 @@ package traefik_wol
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"html/template"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +28,9 @@ type Config struct {
 	RetryInterval       string `json:"retryInterval,omitempty" yaml:"retryInterval,omitempty"`
 	HealthCheckInterval string `json:"healthCheckInterval,omitempty" yaml:"healthCheckInterval,omitempty"`
 	Debug               bool   `json:"debug,omitempty" yaml:"debug,omitempty"`
+	EnableControlPage   bool   `json:"enableControlPage,omitempty" yaml:"enableControlPage,omitempty"`
+	ControlPageTitle    string `json:"controlPageTitle,omitempty" yaml:"controlPageTitle,omitempty"`
+	ServiceDescription  string `json:"serviceDescription,omitempty" yaml:"serviceDescription,omitempty"`
 }
 
 // CreateConfig creates the default plugin configuration.
@@ -36,6 +42,9 @@ func CreateConfig() *Config {
 		RetryInterval:       "5",
 		HealthCheckInterval: "10",
 		Debug:               false,
+		EnableControlPage:   false,
+		ControlPageTitle:    "Service Control",
+		ServiceDescription:  "Service",
 	}
 }
 
@@ -44,6 +53,15 @@ type healthStatus struct {
 	isHealthy  bool
 	lastCheck  time.Time
 	lastState  bool
+}
+
+// wakeStatus tracks the current wake operation
+type wakeStatus struct {
+	isWaking    bool
+	startTime   time.Time
+	message     string
+	progress    int // 0-100
+	originalURL string
 }
 
 // WOLPlugin is the main plugin struct.
@@ -61,8 +79,13 @@ type WOLPlugin struct {
 	retryInterval       time.Duration
 	healthCheckInterval time.Duration
 	debug               bool
+	enableControlPage   bool
+	controlPageTitle    string
+	serviceDescription  string
 	healthCache         *healthStatus
 	healthMutex         sync.RWMutex
+	wakeCache           *wakeStatus
+	wakeMutex           sync.RWMutex
 }
 
 // New creates a new WOL plugin.
@@ -99,6 +122,16 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("invalid healthCheckInterval: %v", err)
 	}
 
+	// Set default values for control page settings
+	controlPageTitle := config.ControlPageTitle
+	if controlPageTitle == "" {
+		controlPageTitle = "Service Control"
+	}
+	serviceDescription := config.ServiceDescription
+	if serviceDescription == "" {
+		serviceDescription = "Service"
+	}
+
 	return &WOLPlugin{
 		next:                next,
 		name:                name,
@@ -113,52 +146,407 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		retryInterval:       time.Duration(retryInterval) * time.Second,
 		healthCheckInterval: time.Duration(healthCheckInterval) * time.Second,
 		debug:               config.Debug,
+		enableControlPage:   config.EnableControlPage,
+		controlPageTitle:    controlPageTitle,
+		serviceDescription:  serviceDescription,
 		healthCache:         &healthStatus{},
 		healthMutex:         sync.RWMutex{},
+		wakeCache:           &wakeStatus{},
+		wakeMutex:           sync.RWMutex{},
 	}, nil
 }
 
+// controlPageTemplate contains the embedded HTML template for the control page
+const controlPageTemplate = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .service-icon {
+            width: 80px;
+            height: 80px;
+            background: #f0f0f0;
+            border-radius: 50%;
+            margin: 0 auto 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+        }
+        
+        .status-indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            border: 3px solid white;
+        }
+        
+        .status-down { background: #ff4757; }
+        .status-waking { background: #ffa502; animation: pulse 2s infinite; }
+        .status-up { background: #2ed573; }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-size: 28px;
+            font-weight: 700;
+        }
+        
+        .service-name {
+            color: #7f8c8d;
+            margin-bottom: 30px;
+            font-size: 18px;
+        }
+        
+        .status-message {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .status-text {
+            font-size: 16px;
+            color: #2c3e50;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+        
+        .progress-bar {
+            background: #ecf0f1;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+        
+        .progress-fill {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            height: 100%;
+            transition: width 0.3s ease;
+            border-radius: 4px;
+        }
+        
+        .time-remaining {
+            font-size: 14px;
+            color: #7f8c8d;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            min-width: 160px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+        }
+        
+        .btn:active {
+            transform: translateY(0);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-secondary {
+            background: #ecf0f1;
+            color: #2c3e50;
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .btn:disabled:hover {
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                margin: 10px;
+                padding: 30px 20px;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+            
+            .btn {
+                min-width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="service-icon" style="position: relative;">
+            🖥️
+            <div id="statusIndicator" class="status-indicator status-down"></div>
+        </div>
+        
+        <h1>{{.Title}}</h1>
+        <div class="service-name">{{.ServiceDescription}}</div>
+        
+        <div class="status-message">
+            <div id="statusText" class="status-text">Service is currently offline</div>
+            <div id="progressContainer" class="hidden">
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill" style="width: 0%"></div>
+                </div>
+                <div id="timeRemaining" class="time-remaining"></div>
+            </div>
+        </div>
+        
+        <div class="button-group">
+            <button id="wakeBtn" class="btn btn-primary" onclick="wakeService()">
+                🚀 Turn On Service
+            </button>
+            <a id="redirectBtn" href="{{.OriginalURL}}" class="btn btn-secondary">
+                ↗️ Go to Service Anyway
+            </a>
+        </div>
+    </div>
+
+    <script>
+        let isWaking = false;
+        let pollInterval;
+        let startTime;
+        let timeout = {{.TimeoutSeconds}};
+        
+        function updateStatus(status) {
+            const indicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = document.getElementById('progressFill');
+            const timeRemaining = document.getElementById('timeRemaining');
+            const wakeBtn = document.getElementById('wakeBtn');
+            
+            indicator.className = 'status-indicator ' + 
+                (status.isHealthy ? 'status-up' : 
+                 status.isWaking ? 'status-waking' : 'status-down');
+            
+            if (status.isHealthy) {
+                statusText.textContent = 'Service is online and ready!';
+                progressContainer.classList.add('hidden');
+                wakeBtn.disabled = true;
+                wakeBtn.textContent = '✅ Service Online';
+                
+                // Auto-redirect after 3 seconds
+                setTimeout(() => {
+                    window.location.href = '{{.OriginalURL}}';
+                }, 3000);
+            } else if (status.isWaking) {
+                statusText.textContent = status.message || 'Waking up service...';
+                progressContainer.classList.remove('hidden');
+                
+                const elapsed = Date.now() - startTime;
+                const progress = Math.min((elapsed / 1000 / timeout) * 100, 95);
+                progressFill.style.width = progress + '%';
+                
+                const remaining = Math.max(0, timeout - elapsed / 1000);
+                timeRemaining.textContent = 'Estimated time remaining: ' + Math.ceil(remaining) + 's';
+                
+                wakeBtn.disabled = true;
+                wakeBtn.textContent = '⏳ Waking Up...';
+            } else {
+                statusText.textContent = status.message || 'Service is currently offline';
+                progressContainer.classList.add('hidden');
+                wakeBtn.disabled = false;
+                wakeBtn.textContent = '🚀 Turn On Service';
+                isWaking = false;
+                if (pollInterval) {
+                    clearInterval(pollInterval);
+                    pollInterval = null;
+                }
+            }
+        }
+        
+        function wakeService() {
+            if (isWaking) return;
+            
+            isWaking = true;
+            startTime = Date.now();
+            
+            fetch('/_wol/wake', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    pollStatus();
+                } else {
+                    updateStatus({
+                        isHealthy: false,
+                        isWaking: false,
+                        message: data.message || 'Failed to start wake process'
+                    });
+                }
+            })
+            .catch(err => {
+                updateStatus({
+                    isHealthy: false,
+                    isWaking: false,
+                    message: 'Error starting wake process'
+                });
+            });
+        }
+        
+        function pollStatus() {
+            if (pollInterval) clearInterval(pollInterval);
+            
+            pollInterval = setInterval(() => {
+                fetch('/_wol/status')
+                .then(response => response.json())
+                .then(data => {
+                    updateStatus(data);
+                    if (data.isHealthy || !data.isWaking) {
+                        clearInterval(pollInterval);
+                        pollInterval = null;
+                    }
+                })
+                .catch(err => {
+                    console.error('Error polling status:', err);
+                });
+            }, 2000);
+        }
+        
+        // Initial status check
+        fetch('/_wol/status')
+        .then(response => response.json())
+        .then(data => updateStatus(data))
+        .catch(err => console.error('Error getting initial status:', err));
+    </script>
+</body>
+</html>`
+
 // ServeHTTP implements the http.Handler interface.
 func (w *WOLPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	// Handle control page endpoints
+	if strings.HasPrefix(req.URL.Path, "/_wol/") {
+		switch req.URL.Path {
+		case "/_wol/wake":
+			w.handleWakeEndpoint(rw, req)
+			return
+		case "/_wol/status":
+			w.handleStatusEndpoint(rw, req)
+			return
+		case "/_wol/redirect":
+			w.handleRedirectEndpoint(rw, req)
+			return
+		}
+	}
+
 	isHealthy := w.getCachedHealthStatus()
 
 	if !isHealthy {
-		fmt.Printf("WOL Plugin [%s]: Service unhealthy, attempting to wake %s\n", w.name, w.macAddress)
-		
-		success := false
-		for attempt := 1; attempt <= w.retryAttempts; attempt++ {
-			if w.debug {
-				fmt.Printf("WOL Plugin [%s]: Wake attempt %d/%d\n", w.name, attempt, w.retryAttempts)
+		if w.enableControlPage {
+			// Show control page instead of auto-wake
+			w.serveControlPage(rw, req)
+			return
+		} else {
+			// Original behavior: auto-wake
+			fmt.Printf("WOL Plugin [%s]: Service unhealthy, attempting to wake %s\n", w.name, w.macAddress)
+			
+			success := false
+			for attempt := 1; attempt <= w.retryAttempts; attempt++ {
+				if w.debug {
+					fmt.Printf("WOL Plugin [%s]: Wake attempt %d/%d\n", w.name, attempt, w.retryAttempts)
+				}
+
+				if err := w.sendWOLPacket(); err != nil {
+					fmt.Printf("WOL Plugin [%s]: Failed to send WOL packet (attempt %d): %v\n", w.name, attempt, err)
+					if attempt < w.retryAttempts {
+						time.Sleep(w.retryInterval)
+						continue
+					}
+					http.Error(rw, "Failed to wake up service after all attempts", http.StatusServiceUnavailable)
+					return
+				}
+
+				if w.waitForService() {
+					success = true
+					break
+				}
+
+				if attempt < w.retryAttempts {
+					fmt.Printf("WOL Plugin [%s]: Service not responding, retrying in %v\n", w.name, w.retryInterval)
+					time.Sleep(w.retryInterval)
+				}
 			}
 
-			if err := w.sendWOLPacket(); err != nil {
-				fmt.Printf("WOL Plugin [%s]: Failed to send WOL packet (attempt %d): %v\n", w.name, attempt, err)
-				if attempt < w.retryAttempts {
-					time.Sleep(w.retryInterval)
-					continue
-				}
-				http.Error(rw, "Failed to wake up service after all attempts", http.StatusServiceUnavailable)
+			if !success {
+				fmt.Printf("WOL Plugin [%s]: Service did not come online after %d attempts\n", w.name, w.retryAttempts)
+				http.Error(rw, "Service did not respond after wake up attempts", http.StatusServiceUnavailable)
 				return
 			}
 
-			if w.waitForService() {
-				success = true
-				break
-			}
-
-			if attempt < w.retryAttempts {
-				fmt.Printf("WOL Plugin [%s]: Service not responding, retrying in %v\n", w.name, w.retryInterval)
-				time.Sleep(w.retryInterval)
-			}
+			fmt.Printf("WOL Plugin [%s]: Service is now online\n", w.name)
 		}
-
-		if !success {
-			fmt.Printf("WOL Plugin [%s]: Service did not come online after %d attempts\n", w.name, w.retryAttempts)
-			http.Error(rw, "Service did not respond after wake up attempts", http.StatusServiceUnavailable)
-			return
-		}
-
-		fmt.Printf("WOL Plugin [%s]: Service is now online\n", w.name)
 	}
 
 	w.next.ServeHTTP(rw, req)
@@ -438,6 +826,237 @@ func (w *WOLPlugin) waitForService() bool {
 			return true
 		}
 		time.Sleep(2 * time.Second)
+	}
+	return false
+}
+
+// serveControlPage renders and serves the control page
+func (w *WOLPlugin) serveControlPage(rw http.ResponseWriter, req *http.Request) {
+	tmpl, err := template.New("controlPage").Parse(controlPageTemplate)
+	if err != nil {
+		http.Error(rw, "Template error", http.StatusInternalServerError)
+		return
+	}
+
+	// Store the original URL for redirection
+	originalURL := req.URL.String()
+	if req.Header.Get("X-Forwarded-Proto") != "" {
+		scheme := req.Header.Get("X-Forwarded-Proto")
+		host := req.Header.Get("X-Forwarded-Host")
+		if host == "" {
+			host = req.Header.Get("Host")
+		}
+		originalURL = scheme + "://" + host + req.URL.Path
+		if req.URL.RawQuery != "" {
+			originalURL += "?" + req.URL.RawQuery
+		}
+	} else {
+		scheme := "http"
+		if req.TLS != nil {
+			scheme = "https"
+		}
+		originalURL = scheme + "://" + req.Host + req.URL.String()
+	}
+
+	w.wakeMutex.Lock()
+	w.wakeCache.originalURL = originalURL
+	w.wakeMutex.Unlock()
+
+	data := struct {
+		Title           string
+		ServiceDescription string
+		OriginalURL     string
+		TimeoutSeconds  int
+	}{
+		Title:           w.controlPageTitle,
+		ServiceDescription: w.serviceDescription,
+		OriginalURL:     originalURL,
+		TimeoutSeconds:  int(w.timeout.Seconds()),
+	}
+
+	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := tmpl.Execute(rw, data); err != nil {
+		http.Error(rw, "Template execution error", http.StatusInternalServerError)
+		return
+	}
+}
+
+// handleWakeEndpoint handles POST requests to /_wol/wake
+func (w *WOLPlugin) handleWakeEndpoint(rw http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.wakeMutex.Lock()
+	if w.wakeCache.isWaking {
+		w.wakeMutex.Unlock()
+		w.writeJSONResponse(rw, map[string]interface{}{
+			"success": false,
+			"message": "Wake process already in progress",
+		})
+		return
+	}
+
+	w.wakeCache.isWaking = true
+	w.wakeCache.startTime = time.Now()
+	w.wakeCache.message = "Initiating wake sequence..."
+	w.wakeCache.progress = 0
+	w.wakeMutex.Unlock()
+
+	// Start wake process in background
+	go w.performWakeSequence()
+
+	w.writeJSONResponse(rw, map[string]interface{}{
+		"success": true,
+		"message": "Wake process started",
+	})
+}
+
+// handleStatusEndpoint handles GET requests to /_wol/status
+func (w *WOLPlugin) handleStatusEndpoint(rw http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	isHealthy := w.getCachedHealthStatus()
+	
+	w.wakeMutex.RLock()
+	wakeStatus := *w.wakeCache
+	w.wakeMutex.RUnlock()
+
+	response := map[string]interface{}{
+		"isHealthy": isHealthy,
+		"isWaking":  wakeStatus.isWaking,
+		"message":   wakeStatus.message,
+		"progress":  wakeStatus.progress,
+	}
+
+	w.writeJSONResponse(rw, response)
+}
+
+// handleRedirectEndpoint handles GET requests to /_wol/redirect
+func (w *WOLPlugin) handleRedirectEndpoint(rw http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.wakeMutex.RLock()
+	originalURL := w.wakeCache.originalURL
+	w.wakeMutex.RUnlock()
+
+	if originalURL == "" {
+		http.Error(rw, "No original URL stored", http.StatusBadRequest)
+		return
+	}
+
+	http.Redirect(rw, req, originalURL, http.StatusFound)
+}
+
+// writeJSONResponse writes a JSON response
+func (w *WOLPlugin) writeJSONResponse(rw http.ResponseWriter, data interface{}) {
+	rw.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(rw).Encode(data); err != nil {
+		http.Error(rw, "JSON encoding error", http.StatusInternalServerError)
+	}
+}
+
+// performWakeSequence runs the wake sequence with status updates
+func (w *WOLPlugin) performWakeSequence() {
+	defer func() {
+		w.wakeMutex.Lock()
+		w.wakeCache.isWaking = false
+		w.wakeMutex.Unlock()
+	}()
+
+	fmt.Printf("WOL Plugin [%s]: Service unhealthy, attempting to wake %s\n", w.name, w.macAddress)
+
+	for attempt := 1; attempt <= w.retryAttempts; attempt++ {
+		w.wakeMutex.Lock()
+		w.wakeCache.message = fmt.Sprintf("Wake attempt %d/%d - Sending WOL packet...", attempt, w.retryAttempts)
+		w.wakeCache.progress = int(float64(attempt-1) / float64(w.retryAttempts) * 40) // 0-40% for sending packets
+		w.wakeMutex.Unlock()
+
+		if w.debug {
+			fmt.Printf("WOL Plugin [%s]: Wake attempt %d/%d\n", w.name, attempt, w.retryAttempts)
+		}
+
+		if err := w.sendWOLPacket(); err != nil {
+			fmt.Printf("WOL Plugin [%s]: Failed to send WOL packet (attempt %d): %v\n", w.name, attempt, err)
+			w.wakeMutex.Lock()
+			w.wakeCache.message = fmt.Sprintf("Failed to send WOL packet (attempt %d): %v", attempt, err)
+			w.wakeMutex.Unlock()
+			
+			if attempt < w.retryAttempts {
+				time.Sleep(w.retryInterval)
+				continue
+			}
+			
+			w.wakeMutex.Lock()
+			w.wakeCache.message = "Failed to wake up service after all attempts"
+			w.wakeMutex.Unlock()
+			return
+		}
+
+		w.wakeMutex.Lock()
+		w.wakeCache.message = fmt.Sprintf("WOL packet sent (attempt %d/%d) - Waiting for service...", attempt, w.retryAttempts)
+		w.wakeCache.progress = 40 + int(float64(attempt-1) / float64(w.retryAttempts) * 30) // 40-70% for waiting
+		w.wakeMutex.Unlock()
+
+		if w.waitForServiceWithProgress() {
+			w.wakeMutex.Lock()
+			w.wakeCache.message = "Service is now online!"
+			w.wakeCache.progress = 100
+			w.wakeMutex.Unlock()
+			fmt.Printf("WOL Plugin [%s]: Service is now online\n", w.name)
+			return
+		}
+
+		if attempt < w.retryAttempts {
+			fmt.Printf("WOL Plugin [%s]: Service not responding, retrying in %v\n", w.name, w.retryInterval)
+			w.wakeMutex.Lock()
+			w.wakeCache.message = fmt.Sprintf("Service not responding, retrying in %v", w.retryInterval)
+			w.wakeMutex.Unlock()
+			time.Sleep(w.retryInterval)
+		}
+	}
+
+	fmt.Printf("WOL Plugin [%s]: Service did not come online after %d attempts\n", w.name, w.retryAttempts)
+	w.wakeMutex.Lock()
+	w.wakeCache.message = fmt.Sprintf("Service did not come online after %d attempts", w.retryAttempts)
+	w.wakeMutex.Unlock()
+}
+
+// waitForServiceWithProgress waits for service with progress updates
+func (w *WOLPlugin) waitForServiceWithProgress() bool {
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: Waiting for service to come online (timeout: %v)\n", w.name, w.timeout)
+	}
+	
+	start := time.Now()
+	checkInterval := 2 * time.Second
+	
+	for time.Since(start) < w.timeout {
+		if w.performHealthCheck() {
+			return true
+		}
+		
+		// Update progress during wait
+		elapsed := time.Since(start)
+		progress := 70 + int(float64(elapsed)/float64(w.timeout)*30) // 70-100% for waiting
+		if progress > 95 {
+			progress = 95 // Cap at 95% until actually healthy
+		}
+		
+		w.wakeMutex.Lock()
+		w.wakeCache.progress = progress
+		remaining := w.timeout - elapsed
+		w.wakeCache.message = fmt.Sprintf("Waiting for service... (%v remaining)", remaining.Truncate(time.Second))
+		w.wakeMutex.Unlock()
+		
+		time.Sleep(checkInterval)
 	}
 	return false
 }

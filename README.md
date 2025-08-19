@@ -13,6 +13,7 @@ A robust Wake-on-LAN middleware plugin for Traefik that automatically wakes up s
 - **Smart Logging**: State-change-only logging to reduce log spam when services are healthy
 - **Debug Logging**: Detailed logging for troubleshooting
 - **Enhanced Error Handling**: Robust error handling with informative messages
+- **Interactive Control Page**: Optional web interface for manual service control with real-time status updates
 - **Production Ready**: Designed for reliable operation in production environments
 
 ## Requirements
@@ -35,20 +36,20 @@ experimental:
   plugins:
     traefik-wol:
       moduleName: "github.com/ottup/traefik-wol"
-      version: "v2.0.1"
+      version: "v2.1.0"
 ```
 
 #### TOML Configuration
 ```toml
 [experimental.plugins.traefik-wol]
   moduleName = "github.com/ottup/traefik-wol"
-  version = "v2.0.1"
+  version = "v2.1.0"
 ```
 
 #### CLI Flags
 ```bash
 --experimental.plugins.traefik-wol.moduleName=github.com/ottup/traefik-wol
---experimental.plugins.traefik-wol.version=v2.0.1
+--experimental.plugins.traefik-wol.version=v2.1.0
 ```
 
 ### Method 2: Local Development Plugin
@@ -72,36 +73,36 @@ For development or private deployment:
    #### Option B: Direct File Download (curl)
    ```bash
    cd ./plugins-local/src/github.com/ottup/traefik-wol
-   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.1/main.go -o main.go
-   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.1/go.mod -o go.mod
-   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.1/.traefik.yml -o .traefik.yml
+   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/main.go -o main.go
+   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/go.mod -o go.mod
+   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/.traefik.yml -o .traefik.yml
    ```
 
    #### Option C: Direct File Download (wget)
    ```bash
    cd ./plugins-local/src/github.com/ottup/traefik-wol
-   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.1/main.go
-   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.1/go.mod
-   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.1/.traefik.yml
+   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/main.go
+   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/go.mod
+   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/.traefik.yml
    ```
 
    #### Option D: GitHub Archive Download (zip)
    ```bash
-   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v2.0.1.zip -o traefik-wol.zip
+   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v2.1.0.zip -o traefik-wol.zip
    unzip traefik-wol.zip
-   mv traefik-wol-2.0.1/* ./plugins-local/src/github.com/ottup/traefik-wol/
-   rm -rf traefik-wol.zip traefik-wol-2.0.1
+   mv traefik-wol-2.1.0/* ./plugins-local/src/github.com/ottup/traefik-wol/
+   rm -rf traefik-wol.zip traefik-wol-2.1.0
    ```
 
    #### Option E: GitHub Archive Download (tarball)
    ```bash
-   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v2.0.1.tar.gz | tar -xz
-   mv traefik-wol-2.0.1/* ./plugins-local/src/github.com/ottup/traefik-wol/
-   rm -rf traefik-wol-2.0.1
+   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v2.1.0.tar.gz | tar -xz
+   mv traefik-wol-2.1.0/* ./plugins-local/src/github.com/ottup/traefik-wol/
+   rm -rf traefik-wol-2.1.0
    ```
 
    #### Option F: Manual Download
-   1. Visit: https://github.com/ottup/traefik-wol/releases/tag/v2.0.1
+   1. Visit: https://github.com/ottup/traefik-wol/releases/tag/v2.1.0
    2. Download `Source code (zip)` or `Source code (tar.gz)`
    3. Extract the archive
    4. Copy `main.go`, `go.mod`, and `.traefik.yml` to `./plugins-local/src/github.com/ottup/traefik-wol/`
@@ -167,6 +168,9 @@ middlewares:
         retryInterval: "5"                                # Optional: Delay between retries in seconds (default: 5)
         healthCheckInterval: "10"                         # Optional: Health check cache interval in seconds (default: 10)
         debug: true                                       # Optional: Enable debug logging (default: false)
+        enableControlPage: true                           # Optional: Enable interactive control page (default: false)
+        controlPageTitle: "My Server Control"            # Optional: Control page title (default: "Service Control")
+        serviceDescription: "My Home Server"             # Optional: Service description shown on control page (default: "Service")
 ```
 
 ### Alternative Configuration Formats
@@ -305,6 +309,62 @@ middlewares:
         ipAddress: "192.168.1.100"     # Direct unicast preferred
         healthCheckInterval: "5"       # More frequent checks on stable network
 ```
+
+## Interactive Control Page
+
+The plugin includes an optional interactive web interface that provides manual control over service wake-up operations. When enabled, instead of automatically waking services, users are presented with a beautiful control page with real-time status updates.
+
+### Features
+
+- **Manual Wake Control**: Users can trigger wake-on-LAN manually via a "Turn On Service" button
+- **Direct Access**: "Go to Service Anyway" button allows bypassing health checks
+- **Real-time Status Updates**: Live progress indicators showing wake-up progress and estimated time remaining
+- **Responsive Design**: Mobile-friendly interface that works on all devices
+- **Auto-redirect**: Automatic redirection to service once it's online
+- **Progress Feedback**: Detailed status messages showing what's happening in the background
+
+### Configuration
+
+Enable the control page by setting `enableControlPage: true`:
+
+```yaml
+middlewares:
+  wol-with-control:
+    plugin:
+      traefik-wol:
+        healthCheck: "http://192.168.1.100:3000/health"
+        macAddress: "00:11:22:33:44:55"
+        enableControlPage: true
+        controlPageTitle: "Home Server Control"
+        serviceDescription: "Media Server"
+```
+
+### Control Page Endpoints
+
+When the control page is enabled, the plugin creates special endpoints:
+
+- **`/_wol/wake`** (POST): Triggers wake-on-LAN sequence
+- **`/_wol/status`** (GET): Returns JSON with current status and progress
+- **`/_wol/redirect`** (GET): Redirects to the original requested URL
+
+### Behavior Differences
+
+| Feature | Auto-Wake Mode (default) | Control Page Mode |
+|---------|-------------------------|-------------------|
+| Service Down | Automatically sends WOL packets | Shows control page interface |
+| User Interaction | None required | Manual "Turn On Service" button |
+| Progress Feedback | Server logs only | Real-time web interface |
+| Direct Access | Not available | "Go to Service Anyway" option |
+| Mobile Access | N/A | Responsive mobile interface |
+
+### Example Control Page Flow
+
+1. **User accesses service** → Service is down
+2. **Control page appears** → Shows service status as "offline"
+3. **User clicks "Turn On Service"** → WOL process begins
+4. **Real-time updates** → "Sending wake packet...", "Waiting for service...", progress bar
+5. **Service comes online** → "Service is online and ready!", auto-redirect after 3 seconds
+6. **User reaches service** → Normal service access
 
 ## Usage
 
@@ -513,6 +573,21 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Community**: Join Traefik community discussions for general plugin support
 
 ## Changelog
+
+### v2.1.0
+- **Interactive Control Page**: Optional web interface for manual WOL control instead of automatic wake-up
+- **Real-time Status Updates**: Live progress indicators with detailed status messages during wake process
+- **Responsive Design**: Mobile-friendly interface with modern CSS animations and touch-optimized controls
+- **Manual Wake Control**: "Turn On Service" button triggers WOL with progress tracking
+- **Direct Access Option**: "Go to Service Anyway" button bypasses health checks for immediate access
+- **REST API Endpoints**: New `/_wol/wake`, `/_wol/status`, and `/_wol/redirect` endpoints for control page functionality
+- **Background Processing**: Non-blocking WOL operations with real-time progress updates via JavaScript polling
+- **Backward Compatibility**: Control page is disabled by default, preserving existing auto-wake behavior
+- **Enhanced Documentation**: Comprehensive guide for control page configuration and usage
+- **New Configuration Options**:
+  - `enableControlPage`: Enable/disable the interactive control page
+  - `controlPageTitle`: Customize the page title
+  - `serviceDescription`: Set service description shown on control page
 
 ### v2.0.1
 - **Bugfix**: Fix Yaegi interpreter compatibility issue with UDP socket type assertion

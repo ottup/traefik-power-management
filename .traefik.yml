@@ -16,3 +16,6 @@ testData:
   retryInterval: "5"
   healthCheckInterval: "10"
   debug: true
+  enableControlPage: true
+  controlPageTitle: "Home Server Control"
+  serviceDescription: "Home Media Server"
