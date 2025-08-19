@@ -381,15 +381,7 @@ func (w *WOLPlugin) sendToAddress(packet []byte, targetAddr string) error {
 	}
 	defer conn.Close()
 
-	// Enable broadcast for this socket
-	if udpConn, ok := conn.(*net.UDPConn); ok {
-		if rawConn, err := udpConn.SyscallConn(); err == nil {
-			rawConn.Control(func(fd uintptr) {
-				// Enable broadcast on socket (platform-specific implementation would go here)
-				// For now, we rely on the OS default behavior
-			})
-		}
-	}
+	// Note: Broadcast is handled by OS defaults for UDP sockets
 
 	_, err = conn.Write(packet)
 	if err != nil {
