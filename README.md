@@ -4,10 +4,13 @@ A robust Wake-on-LAN middleware plugin for Traefik that automatically wakes up s
 
 ## Features
 
-- **Health Check Monitoring**: Continuously monitors service availability
+- **Health Check Monitoring**: Smart health check caching with configurable intervals to reduce redundant checks
 - **Automatic Wake-up**: Sends WOL magic packets when services are down
+- **Container-Optimized**: Enhanced broadcast packet delivery for containers, LXC, and Docker environments
+- **Multi-Interface Support**: Automatic network interface discovery and broadcast address calculation
 - **Configurable Retry Logic**: Customizable retry attempts and intervals
 - **Flexible MAC Address Support**: Accepts various MAC address formats (colon, dash, dot separated)
+- **Smart Logging**: State-change-only logging to reduce log spam when services are healthy
 - **Debug Logging**: Detailed logging for troubleshooting
 - **Enhanced Error Handling**: Robust error handling with informative messages
 - **Production Ready**: Designed for reliable operation in production environments
@@ -155,11 +158,14 @@ middlewares:
       traefik-wol:
         healthCheck: "http://192.168.1.100:3000/health"  # Required: Health check endpoint
         macAddress: "00:11:22:33:44:55"                   # Required: Target MAC address
-        ipAddress: "192.168.1.100"                        # Required: Target IP address
+        ipAddress: "192.168.1.100"                        # Optional: Target IP address (used for unicast, fallback to broadcast)
+        broadcastAddress: "192.168.1.255"                 # Optional: Custom broadcast address
+        networkInterface: "eth0"                          # Optional: Specific network interface to use
         port: "9"                                         # Optional: WOL port (default: 9)
         timeout: "30"                                     # Optional: Wake timeout in seconds (default: 30)
         retryAttempts: "3"                                # Optional: Number of retry attempts (default: 3)
         retryInterval: "5"                                # Optional: Delay between retries in seconds (default: 5)
+        healthCheckInterval: "10"                         # Optional: Health check cache interval in seconds (default: 10)
         debug: true                                       # Optional: Enable debug logging (default: false)
 ```
 
@@ -171,10 +177,13 @@ middlewares:
   healthCheck = "http://192.168.1.100:3000/health"
   macAddress = "00:11:22:33:44:55"
   ipAddress = "192.168.1.100"
+  broadcastAddress = "192.168.1.255"
+  networkInterface = "eth0"
   port = "9"
   timeout = "30"
   retryAttempts = "3"
   retryInterval = "5"
+  healthCheckInterval = "10"
   debug = true
 ```
 
@@ -189,10 +198,13 @@ middlewares:
             "healthCheck": "http://192.168.1.100:3000/health",
             "macAddress": "00:11:22:33:44:55",
             "ipAddress": "192.168.1.100",
+            "broadcastAddress": "192.168.1.255",
+            "networkInterface": "eth0",
             "port": "9",
             "timeout": "30",
             "retryAttempts": "3",
             "retryInterval": "5",
+            "healthCheckInterval": "10",
             "debug": true
           }
         }
@@ -218,6 +230,80 @@ macAddress: "00.11.22.33.44.55"
 
 # No separators
 macAddress: "001122334455"
+```
+
+### Container and Network Configuration
+
+The plugin is optimized for containerized environments (Docker, LXC, etc.) and includes enhanced networking features:
+
+#### Broadcast Packet Support
+- **Automatic Broadcast Discovery**: The plugin automatically detects available network interfaces and calculates broadcast addresses
+- **Container Compatibility**: Uses broadcast packets that can traverse container network boundaries
+- **Multi-Interface Support**: Sends WOL packets on all available network interfaces for maximum reliability
+
+#### Configuration Options
+
+```yaml
+# Basic configuration (recommended for most cases)
+middlewares:
+  wol-middleware:
+    plugin:
+      traefik-wol:
+        healthCheck: "http://192.168.1.100:3000/health"
+        macAddress: "00:11:22:33:44:55"
+        # ipAddress is now optional - broadcast will be used automatically
+
+# Advanced configuration for specific networking needs
+middlewares:
+  wol-advanced:
+    plugin:
+      traefik-wol:
+        healthCheck: "http://192.168.1.100:3000/health"
+        macAddress: "00:11:22:33:44:55"
+        ipAddress: "192.168.1.100"              # Optional: Try unicast first
+        broadcastAddress: "192.168.1.255"       # Optional: Custom broadcast address
+        networkInterface: "eth0"                # Optional: Use specific interface only
+        healthCheckInterval: "15"               # Optional: Cache health checks for 15s
+```
+
+#### Deployment Scenarios
+
+**Docker/Container Deployment:**
+```yaml
+# Minimal configuration - plugin auto-detects broadcast addresses
+middlewares:
+  wol-container:
+    plugin:
+      traefik-wol:
+        healthCheck: "http://target-service:3000/health"
+        macAddress: "00:11:22:33:44:55"
+        healthCheckInterval: "10"  # Reduce health check frequency
+```
+
+**LXC/VM Deployment:**
+```yaml
+# Use specific network interface for better control
+middlewares:
+  wol-lxc:
+    plugin:
+      traefik-wol:
+        healthCheck: "http://192.168.1.100:3000/health"
+        macAddress: "00:11:22:33:44:55"
+        networkInterface: "lxcbr0"  # LXC bridge interface
+        broadcastAddress: "192.168.1.255"
+```
+
+**Host Network Deployment:**
+```yaml
+# Traditional deployment with direct network access
+middlewares:
+  wol-host:
+    plugin:
+      traefik-wol:
+        healthCheck: "http://192.168.1.100:3000/health"
+        macAddress: "00:11:22:33:44:55"
+        ipAddress: "192.168.1.100"     # Direct unicast preferred
+        healthCheckInterval: "5"       # More frequent checks on stable network
 ```
 
 ## Usage
@@ -310,9 +396,30 @@ http:
   wolcmd 00:11:22:33:44:55 192.168.1.100
   ```
 
+#### Container/LXC WOL Issues
+- **Cause**: Network isolation preventing WOL packets from reaching target
+- **Solution**: Use broadcast addresses instead of unicast:
+  ```yaml
+  # Remove ipAddress to force broadcast mode
+  middlewares:
+    wol-middleware:
+      plugin:
+        traefik-wol:
+          healthCheck: "http://192.168.1.100:3000/health"
+          macAddress: "00:11:22:33:44:55"
+          # ipAddress: "192.168.1.100"  # Comment out or remove
+          broadcastAddress: "192.168.1.255"  # Add specific broadcast
+  ```
+- **Check**: Enable debug mode to see packet delivery attempts
+
 #### Network Issues
 - **Cause**: Firewall blocking UDP traffic or incorrect network configuration
-- **Solution**: Ensure UDP port 9 is accessible
+- **Solution**: Ensure UDP port 9 is accessible and broadcast packets are allowed
+- **Container Networks**: Verify container can send broadcast packets:
+  ```bash
+  # Test from container
+  docker exec traefik ping -c 1 192.168.1.255
+  ```
 - **Check**: Test with different broadcast addresses if needed
 
 ### Debug Mode
@@ -406,6 +513,20 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Community**: Join Traefik community discussions for general plugin support
 
 ## Changelog
+
+### v2.0.0
+- **Container/LXC Optimization**: Enhanced WOL packet delivery for containerized environments
+- **Broadcast Support**: Automatic network interface discovery and broadcast address calculation
+- **Smart Health Check Caching**: Configurable health check intervals to reduce redundant checks
+- **State-Change Logging**: Reduced log spam by only logging on health state changes
+- **Multi-Interface Support**: Send WOL packets on multiple network interfaces for maximum reliability
+- **New Configuration Options**:
+  - `broadcastAddress`: Custom broadcast address configuration
+  - `networkInterface`: Specific network interface selection
+  - `healthCheckInterval`: Configurable health check cache interval
+- **Breaking Changes**: 
+  - `ipAddress` is now optional (will fallback to broadcast if not provided)
+  - Health check behavior changed to use caching (may affect very rapid health state changes)
 
 ### v1.0.1
 - Fixed package naming issue for proper plugin loading

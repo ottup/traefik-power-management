@@ -1,15 +1,18 @@
 displayName: "Enhanced WOL Plugin"
 type: middleware
 import: github.com/ottup/traefik-wol
-summary: "Wake-on-LAN middleware with retry logic and health checks"
+summary: "Wake-on-LAN middleware with container support, broadcast packets, and smart health caching"
 iconPath: ""
 bannerPath: ""
 testData:
   healthCheck: "http://192.168.1.100:3000/health"
   macAddress: "00:11:22:33:44:55"
   ipAddress: "192.168.1.100"
+  broadcastAddress: "192.168.1.255"
+  networkInterface: "eth0"
   port: "9"
   timeout: "30"
   retryAttempts: "3"
   retryInterval: "5"
+  healthCheckInterval: "10"
   debug: true
