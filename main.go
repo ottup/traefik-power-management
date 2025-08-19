@@ -1,5 +1,5 @@
-// Package traefikwol implements a Wake-on-LAN middleware plugin for Traefik.
-package traefikwol
+// Package traefik_wol implements a Wake-on-LAN middleware plugin for Traefik.
+package traefik_wol
 
 import (
 	"context"

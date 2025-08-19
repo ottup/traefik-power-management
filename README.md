@@ -57,10 +57,60 @@ For development or private deployment:
    mkdir -p ./plugins-local/src/github.com/ottup/traefik-wol
    ```
 
-2. **Clone or Copy Plugin Source**
+2. **Download Plugin Source**
+
+   Choose one of the following methods:
+
+   #### Option A: Git Clone (Recommended)
    ```bash
    git clone https://github.com/ottup/traefik-wol.git ./plugins-local/src/github.com/ottup/traefik-wol
    ```
+
+   #### Option B: Direct File Download (curl)
+   ```bash
+   cd ./plugins-local/src/github.com/ottup/traefik-wol
+   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/main.go -o main.go
+   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/go.mod -o go.mod
+   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/.traefik.yml -o .traefik.yml
+   ```
+
+   #### Option C: Direct File Download (wget)
+   ```bash
+   cd ./plugins-local/src/github.com/ottup/traefik-wol
+   wget https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/main.go
+   wget https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/go.mod
+   wget https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/.traefik.yml
+   ```
+
+   #### Option D: GitHub Archive Download (zip)
+   ```bash
+   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v1.0.3.zip -o traefik-wol.zip
+   unzip traefik-wol.zip
+   mv traefik-wol-1.0.3/* ./plugins-local/src/github.com/ottup/traefik-wol/
+   rm -rf traefik-wol.zip traefik-wol-1.0.3
+   ```
+
+   #### Option E: GitHub Archive Download (tarball)
+   ```bash
+   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v1.0.3.tar.gz | tar -xz
+   mv traefik-wol-1.0.3/* ./plugins-local/src/github.com/ottup/traefik-wol/
+   rm -rf traefik-wol-1.0.3
+   ```
+
+   #### Option F: Manual Download
+   1. Visit: https://github.com/ottup/traefik-wol/releases/tag/v1.0.3
+   2. Download `Source code (zip)` or `Source code (tar.gz)`
+   3. Extract the archive
+   4. Copy `main.go`, `go.mod`, and `.traefik.yml` to `./plugins-local/src/github.com/ottup/traefik-wol/`
+
+   **Quick Reference - Choose Your Method:**
+   - **Git available**: Use Option A (git clone)
+   - **No git, have curl**: Use Option B (direct download)
+   - **No git, have wget**: Use Option C (direct download)
+   - **Want single archive**: Use Option D (zip) or E (tarball)
+   - **Browser only**: Use Option F (manual download)
+
+   **Required Files**: All methods must include `main.go`, `go.mod`, and `.traefik.yml`
 
 3. **Configure Static Configuration**
 
