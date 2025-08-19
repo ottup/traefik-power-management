@@ -35,20 +35,20 @@ experimental:
   plugins:
     traefik-wol:
       moduleName: "github.com/ottup/traefik-wol"
-      version: "v1.0.1"
+      version: "v2.0.0"
 ```
 
 #### TOML Configuration
 ```toml
 [experimental.plugins.traefik-wol]
   moduleName = "github.com/ottup/traefik-wol"
-  version = "v1.0.1"
+  version = "v2.0.0"
 ```
 
 #### CLI Flags
 ```bash
 --experimental.plugins.traefik-wol.moduleName=github.com/ottup/traefik-wol
---experimental.plugins.traefik-wol.version=v1.0.1
+--experimental.plugins.traefik-wol.version=v2.0.0
 ```
 
 ### Method 2: Local Development Plugin
@@ -72,36 +72,36 @@ For development or private deployment:
    #### Option B: Direct File Download (curl)
    ```bash
    cd ./plugins-local/src/github.com/ottup/traefik-wol
-   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/main.go -o main.go
-   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/go.mod -o go.mod
-   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/.traefik.yml -o .traefik.yml
+   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.0/main.go -o main.go
+   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.0/go.mod -o go.mod
+   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.0/.traefik.yml -o .traefik.yml
    ```
 
    #### Option C: Direct File Download (wget)
    ```bash
    cd ./plugins-local/src/github.com/ottup/traefik-wol
-   wget https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/main.go
-   wget https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/go.mod
-   wget https://raw.githubusercontent.com/ottup/traefik-wol/v1.0.3/.traefik.yml
+   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.0/main.go
+   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.0/go.mod
+   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.0.0/.traefik.yml
    ```
 
    #### Option D: GitHub Archive Download (zip)
    ```bash
-   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v1.0.3.zip -o traefik-wol.zip
+   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v2.0.0.zip -o traefik-wol.zip
    unzip traefik-wol.zip
-   mv traefik-wol-1.0.3/* ./plugins-local/src/github.com/ottup/traefik-wol/
-   rm -rf traefik-wol.zip traefik-wol-1.0.3
+   mv traefik-wol-2.0.0/* ./plugins-local/src/github.com/ottup/traefik-wol/
+   rm -rf traefik-wol.zip traefik-wol-2.0.0
    ```
 
    #### Option E: GitHub Archive Download (tarball)
    ```bash
-   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v1.0.3.tar.gz | tar -xz
-   mv traefik-wol-1.0.3/* ./plugins-local/src/github.com/ottup/traefik-wol/
-   rm -rf traefik-wol-1.0.3
+   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v2.0.0.tar.gz | tar -xz
+   mv traefik-wol-2.0.0/* ./plugins-local/src/github.com/ottup/traefik-wol/
+   rm -rf traefik-wol-2.0.0
    ```
 
    #### Option F: Manual Download
-   1. Visit: https://github.com/ottup/traefik-wol/releases/tag/v1.0.3
+   1. Visit: https://github.com/ottup/traefik-wol/releases/tag/v2.0.0
    2. Download `Source code (zip)` or `Source code (tar.gz)`
    3. Extract the archive
    4. Copy `main.go`, `go.mod`, and `.traefik.yml` to `./plugins-local/src/github.com/ottup/traefik-wol/`
