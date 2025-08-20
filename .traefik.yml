@@ -1,10 +1,11 @@
-displayName: "Enhanced WOL Plugin"
+displayName: "Traefik Power Management Plugin"
 type: middleware
-import: github.com/ottup/traefik-wol
-summary: "Wake-on-LAN middleware with container support, broadcast packets, and smart health caching"
+import: github.com/ottup/traefik-power-management
+summary: "Complete power management middleware with WOL, SSH/IPMI shutdown, and interactive dashboard"
 iconPath: ""
 bannerPath: ""
 testData:
+  # Basic WOL configuration
   healthCheck: "http://192.168.1.100:3000/health"
   macAddress: "00:11:22:33:44:55"
   ipAddress: "192.168.1.100"
@@ -16,6 +17,32 @@ testData:
   retryInterval: "5"
   healthCheckInterval: "10"
   debug: true
+  
+  # Control page configuration
   enableControlPage: true
   controlPageTitle: "Home Server Control"
   serviceDescription: "Home Media Server"
+  
+  # Auto-redirect configuration
+  autoRedirect: false
+  redirectDelay: "5"
+  
+  # Dashboard configuration
+  showPowerOffButton: true
+  confirmPowerOff: true
+  hideRedirectButton: false
+  
+  # Power-off configuration
+  powerOffMethod: "ssh"
+  powerOffCommand: "sudo shutdown -h now"
+  
+  # SSH configuration
+  sshHost: "192.168.1.100"
+  sshUser: "admin"
+  sshKeyPath: "/path/to/ssh/key"
+  sshPort: "22"
+  
+  # IPMI configuration (alternative to SSH)
+  # ipmiHost: "192.168.1.100"
+  # ipmiUser: "ADMIN"
+  # ipmiPassword: "password"

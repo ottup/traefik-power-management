@@ -1,3 +1,3 @@
-module github.com/ottup/traefik-wol
+module github.com/ottup/traefik-power-management
 
 go 1.21

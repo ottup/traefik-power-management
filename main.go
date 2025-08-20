@@ -1,5 +1,19 @@
-// Package traefik_wol implements a Wake-on-LAN middleware plugin for Traefik.
-package traefik_wol
+// Package traefik_power_management implements a comprehensive power management middleware plugin for Traefik.
+package traefik_power_management
+
+const (
+	// PluginVersion represents the current version of the plugin
+	PluginVersion = "3.0.0"
+	
+	// DefaultPort is the default WOL UDP port
+	DefaultPort = 9
+	
+	// DefaultTimeout is the default wake timeout in seconds
+	DefaultTimeout = 30
+	
+	// DefaultRetryAttempts is the default number of wake retry attempts
+	DefaultRetryAttempts = 3
+)
 
 import (
 	"context"
@@ -9,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,20 +46,61 @@ type Config struct {
 	EnableControlPage   bool   `json:"enableControlPage,omitempty" yaml:"enableControlPage,omitempty"`
 	ControlPageTitle    string `json:"controlPageTitle,omitempty" yaml:"controlPageTitle,omitempty"`
 	ServiceDescription  string `json:"serviceDescription,omitempty" yaml:"serviceDescription,omitempty"`
+	
+	// Auto-redirect configuration
+	AutoRedirect        bool   `json:"autoRedirect,omitempty" yaml:"autoRedirect,omitempty"`
+	RedirectDelay       string `json:"redirectDelay,omitempty" yaml:"redirectDelay,omitempty"`
+	
+	// Dashboard configuration
+	ShowPowerOffButton  bool   `json:"showPowerOffButton,omitempty" yaml:"showPowerOffButton,omitempty"`
+	ConfirmPowerOff     bool   `json:"confirmPowerOff,omitempty" yaml:"confirmPowerOff,omitempty"`
+	HideRedirectButton  bool   `json:"hideRedirectButton,omitempty" yaml:"hideRedirectButton,omitempty"`
+	
+	// Power-off configuration
+	PowerOffMethod      string `json:"powerOffMethod,omitempty" yaml:"powerOffMethod,omitempty"`
+	PowerOffCommand     string `json:"powerOffCommand,omitempty" yaml:"powerOffCommand,omitempty"`
+	
+	// SSH configuration
+	SSHHost             string `json:"sshHost,omitempty" yaml:"sshHost,omitempty"`
+	SSHUser             string `json:"sshUser,omitempty" yaml:"sshUser,omitempty"`
+	SSHKeyPath          string `json:"sshKeyPath,omitempty" yaml:"sshKeyPath,omitempty"`
+	SSHPassword         string `json:"sshPassword,omitempty" yaml:"sshPassword,omitempty"`
+	SSHPort             string `json:"sshPort,omitempty" yaml:"sshPort,omitempty"`
+	
+	// IPMI configuration
+	IPMIHost            string `json:"ipmiHost,omitempty" yaml:"ipmiHost,omitempty"`
+	IPMIUser            string `json:"ipmiUser,omitempty" yaml:"ipmiUser,omitempty"`
+	IPMIPassword        string `json:"ipmiPassword,omitempty" yaml:"ipmiPassword,omitempty"`
 }
 
 // CreateConfig creates the default plugin configuration.
 func CreateConfig() *Config {
 	return &Config{
-		Port:                "9",
-		Timeout:             "30",
-		RetryAttempts:       "3",
+		Port:                fmt.Sprintf("%d", DefaultPort),
+		Timeout:             fmt.Sprintf("%d", DefaultTimeout),
+		RetryAttempts:       fmt.Sprintf("%d", DefaultRetryAttempts),
 		RetryInterval:       "5",
 		HealthCheckInterval: "10",
 		Debug:               false,
 		EnableControlPage:   false,
 		ControlPageTitle:    "Service Control",
 		ServiceDescription:  "Service",
+		
+		// Auto-redirect defaults
+		AutoRedirect:        false,
+		RedirectDelay:       "3",
+		
+		// Dashboard defaults
+		ShowPowerOffButton:  true,
+		ConfirmPowerOff:     true,
+		HideRedirectButton:  false,
+		
+		// Power-off defaults
+		PowerOffMethod:      "ssh",
+		PowerOffCommand:     "sudo shutdown -h now",
+		
+		// SSH defaults
+		SSHPort:             "22",
 	}
 }
 
@@ -55,13 +111,14 @@ type healthStatus struct {
 	lastState  bool
 }
 
-// wakeStatus tracks the current wake operation
+// wakeStatus tracks the current wake/power operations
 type wakeStatus struct {
-	isWaking    bool
-	startTime   time.Time
-	message     string
-	progress    int // 0-100
-	originalURL string
+	isWaking      bool
+	isPoweringOff bool
+	startTime     time.Time
+	message       string
+	progress      int // 0-100
+	originalURL   string
 }
 
 // WOLPlugin is the main plugin struct.
@@ -82,6 +139,32 @@ type WOLPlugin struct {
 	enableControlPage   bool
 	controlPageTitle    string
 	serviceDescription  string
+	
+	// Auto-redirect configuration
+	autoRedirect        bool
+	redirectDelay       time.Duration
+	
+	// Dashboard configuration
+	showPowerOffButton  bool
+	confirmPowerOff     bool
+	hideRedirectButton  bool
+	
+	// Power-off configuration
+	powerOffMethod      string
+	powerOffCommand     string
+	
+	// SSH configuration
+	sshHost             string
+	sshUser             string
+	sshKeyPath          string
+	sshPassword         string
+	sshPort             int
+	
+	// IPMI configuration
+	ipmiHost            string
+	ipmiUser            string
+	ipmiPassword        string
+	
 	healthCache         *healthStatus
 	healthMutex         sync.RWMutex
 	wakeCache           *wakeStatus
@@ -97,6 +180,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("macAddress is required")
 	}
 
+	// Parse basic configuration
 	port, err := strconv.Atoi(config.Port)
 	if err != nil {
 		return nil, fmt.Errorf("invalid port: %v", err)
@@ -120,6 +204,53 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 	healthCheckInterval, err := strconv.Atoi(config.HealthCheckInterval)
 	if err != nil {
 		return nil, fmt.Errorf("invalid healthCheckInterval: %v", err)
+	}
+
+	// Parse auto-redirect configuration
+	redirectDelay, err := strconv.Atoi(config.RedirectDelay)
+	if err != nil {
+		return nil, fmt.Errorf("invalid redirectDelay: %v", err)
+	}
+
+	// Parse SSH port
+	sshPort := 22
+	if config.SSHPort != "" {
+		sshPort, err = strconv.Atoi(config.SSHPort)
+		if err != nil {
+			return nil, fmt.Errorf("invalid sshPort: %v", err)
+		}
+	}
+
+	// Validate power-off method if enabled
+	if config.ShowPowerOffButton && config.PowerOffMethod != "" {
+		switch config.PowerOffMethod {
+		case "ssh":
+			if config.SSHHost == "" {
+				return nil, fmt.Errorf("sshHost is required when powerOffMethod is ssh")
+			}
+			if config.SSHUser == "" {
+				return nil, fmt.Errorf("sshUser is required when powerOffMethod is ssh")
+			}
+			if config.SSHKeyPath == "" && config.SSHPassword == "" {
+				return nil, fmt.Errorf("either sshKeyPath or sshPassword is required when powerOffMethod is ssh")
+			}
+		case "ipmi":
+			if config.IPMIHost == "" {
+				return nil, fmt.Errorf("ipmiHost is required when powerOffMethod is ipmi")
+			}
+			if config.IPMIUser == "" {
+				return nil, fmt.Errorf("ipmiUser is required when powerOffMethod is ipmi")
+			}
+			if config.IPMIPassword == "" {
+				return nil, fmt.Errorf("ipmiPassword is required when powerOffMethod is ipmi")
+			}
+		case "custom":
+			if config.PowerOffCommand == "" {
+				return nil, fmt.Errorf("powerOffCommand is required when powerOffMethod is custom")
+			}
+		default:
+			return nil, fmt.Errorf("invalid powerOffMethod: %s (valid options: ssh, ipmi, custom)", config.PowerOffMethod)
+		}
 	}
 
 	// Set default values for control page settings
@@ -149,6 +280,32 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		enableControlPage:   config.EnableControlPage,
 		controlPageTitle:    controlPageTitle,
 		serviceDescription:  serviceDescription,
+		
+		// Auto-redirect configuration
+		autoRedirect:        config.AutoRedirect,
+		redirectDelay:       time.Duration(redirectDelay) * time.Second,
+		
+		// Dashboard configuration
+		showPowerOffButton:  config.ShowPowerOffButton,
+		confirmPowerOff:     config.ConfirmPowerOff,
+		hideRedirectButton:  config.HideRedirectButton,
+		
+		// Power-off configuration
+		powerOffMethod:      config.PowerOffMethod,
+		powerOffCommand:     config.PowerOffCommand,
+		
+		// SSH configuration
+		sshHost:             config.SSHHost,
+		sshUser:             config.SSHUser,
+		sshKeyPath:          config.SSHKeyPath,
+		sshPassword:         config.SSHPassword,
+		sshPort:             sshPort,
+		
+		// IPMI configuration
+		ipmiHost:            config.IPMIHost,
+		ipmiUser:            config.IPMIUser,
+		ipmiPassword:        config.IPMIPassword,
+		
 		healthCache:         &healthStatus{},
 		healthMutex:         sync.RWMutex{},
 		wakeCache:           &wakeStatus{},
@@ -264,7 +421,7 @@ const controlPageTemplate = `<!DOCTYPE html>
             border-radius: 4px;
         }
         
-        .time-remaining {
+        .details-text {
             font-size: 14px;
             color: #7f8c8d;
         }
@@ -355,7 +512,7 @@ const controlPageTemplate = `<!DOCTYPE html>
                 <div class="progress-bar">
                     <div id="progressFill" class="progress-fill" style="width: 0%"></div>
                 </div>
-                <div id="timeRemaining" class="time-remaining"></div>
+                <div id="progressDetails" class="details-text"></div>
             </div>
         </div>
         
@@ -363,25 +520,35 @@ const controlPageTemplate = `<!DOCTYPE html>
             <button id="wakeBtn" class="btn btn-primary" onclick="wakeService()">
                 🚀 Turn On Service
             </button>
+            {{if .ShowPowerOffButton}}
+            <button id="powerOffBtn" class="btn btn-danger" onclick="powerOffService()" style="background: linear-gradient(135deg, #ff4757 0%, #c44569 100%);">
+                ⏻ Power Off
+            </button>
+            {{end}}
+            {{if not .HideRedirectButton}}
             <a id="redirectBtn" href="{{.OriginalURL}}" class="btn btn-secondary">
                 ↗️ Go to Service Anyway
             </a>
+            {{end}}
         </div>
     </div>
 
     <script>
         let isWaking = false;
+        let isPoweringOff = false;
         let pollInterval;
-        let startTime;
-        let timeout = {{.TimeoutSeconds}};
+        let autoRedirect = {{.AutoRedirect}};
+        let redirectDelay = {{.RedirectDelaySeconds}};
+        let confirmPowerOff = {{.ConfirmPowerOff}};
         
         function updateStatus(status) {
             const indicator = document.getElementById('statusIndicator');
             const statusText = document.getElementById('statusText');
             const progressContainer = document.getElementById('progressContainer');
             const progressFill = document.getElementById('progressFill');
-            const timeRemaining = document.getElementById('timeRemaining');
+            const progressDetails = document.getElementById('progressDetails');
             const wakeBtn = document.getElementById('wakeBtn');
+            const powerOffBtn = document.getElementById('powerOffBtn');
             
             indicator.className = 'status-indicator ' + 
                 (status.isHealthy ? 'status-up' : 
@@ -392,30 +559,55 @@ const controlPageTemplate = `<!DOCTYPE html>
                 progressContainer.classList.add('hidden');
                 wakeBtn.disabled = true;
                 wakeBtn.textContent = '✅ Service Online';
+                if (powerOffBtn) {
+                    powerOffBtn.disabled = false;
+                    powerOffBtn.textContent = '⏻ Power Off';
+                }
                 
-                // Auto-redirect after 3 seconds
-                setTimeout(() => {
-                    window.location.href = '{{.OriginalURL}}';
-                }, 3000);
+                // Auto-redirect if enabled
+                if (autoRedirect) {
+                    statusText.textContent = 'Service is online! Redirecting in ' + redirectDelay + ' seconds...';
+                    setTimeout(() => {
+                        window.location.href = '{{.OriginalURL}}';
+                    }, redirectDelay * 1000);
+                }
             } else if (status.isWaking) {
                 statusText.textContent = status.message || 'Waking up service...';
                 progressContainer.classList.remove('hidden');
                 
-                const elapsed = Date.now() - startTime;
-                const progress = Math.min((elapsed / 1000 / timeout) * 100, 95);
-                progressFill.style.width = progress + '%';
-                
-                const remaining = Math.max(0, timeout - elapsed / 1000);
-                timeRemaining.textContent = 'Estimated time remaining: ' + Math.ceil(remaining) + 's';
+                progressFill.style.width = (status.progress || 0) + '%';
+                progressDetails.textContent = 'Wake process in progress...';
                 
                 wakeBtn.disabled = true;
                 wakeBtn.textContent = '⏳ Waking Up...';
+                if (powerOffBtn) {
+                    powerOffBtn.disabled = true;
+                    powerOffBtn.textContent = '⏻ Power Off';
+                }
+            } else if (status.isPoweringOff) {
+                statusText.textContent = status.message || 'Powering off service...';
+                progressContainer.classList.remove('hidden');
+                
+                progressFill.style.width = (status.progress || 0) + '%';
+                progressDetails.textContent = 'Power-off process in progress...';
+                
+                wakeBtn.disabled = true;
+                wakeBtn.textContent = '🚀 Turn On Service';
+                if (powerOffBtn) {
+                    powerOffBtn.disabled = true;
+                    powerOffBtn.textContent = '⏳ Powering Off...';
+                }
             } else {
                 statusText.textContent = status.message || 'Service is currently offline';
                 progressContainer.classList.add('hidden');
                 wakeBtn.disabled = false;
                 wakeBtn.textContent = '🚀 Turn On Service';
+                if (powerOffBtn) {
+                    powerOffBtn.disabled = false;
+                    powerOffBtn.textContent = '⏻ Power Off';
+                }
                 isWaking = false;
+                isPoweringOff = false;
                 if (pollInterval) {
                     clearInterval(pollInterval);
                     pollInterval = null;
@@ -424,10 +616,9 @@ const controlPageTemplate = `<!DOCTYPE html>
         }
         
         function wakeService() {
-            if (isWaking) return;
+            if (isWaking || isPoweringOff) return;
             
             isWaking = true;
-            startTime = Date.now();
             
             fetch('/_wol/wake', {
                 method: 'POST',
@@ -456,6 +647,42 @@ const controlPageTemplate = `<!DOCTYPE html>
             });
         }
         
+        function powerOffService() {
+            if (isWaking || isPoweringOff) return;
+            
+            if (confirmPowerOff && !confirm('Are you sure you want to power off the service?')) {
+                return;
+            }
+            
+            isPoweringOff = true;
+            
+            fetch('/_wol/poweroff', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    pollStatus();
+                } else {
+                    updateStatus({
+                        isHealthy: false,
+                        isPoweringOff: false,
+                        message: data.message || 'Failed to start power-off process'
+                    });
+                }
+            })
+            .catch(err => {
+                updateStatus({
+                    isHealthy: false,
+                    isPoweringOff: false,
+                    message: 'Error starting power-off process'
+                });
+            });
+        }
+        
         function pollStatus() {
             if (pollInterval) clearInterval(pollInterval);
             
@@ -464,7 +691,7 @@ const controlPageTemplate = `<!DOCTYPE html>
                 .then(response => response.json())
                 .then(data => {
                     updateStatus(data);
-                    if (data.isHealthy || !data.isWaking) {
+                    if (data.isHealthy || (!data.isWaking && !data.isPoweringOff)) {
                         clearInterval(pollInterval);
                         pollInterval = null;
                     }
@@ -491,6 +718,9 @@ func (w *WOLPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		switch req.URL.Path {
 		case "/_wol/wake":
 			w.handleWakeEndpoint(rw, req)
+			return
+		case "/_wol/poweroff":
+			w.handlePowerOffEndpoint(rw, req)
 			return
 		case "/_wol/status":
 			w.handleStatusEndpoint(rw, req)
@@ -591,23 +821,53 @@ func (w *WOLPlugin) getCachedHealthStatus() bool {
 }
 
 func (w *WOLPlugin) performHealthCheck() bool {
+	// Create optimized HTTP client with connection pooling
 	client := &http.Client{
-		Timeout: 5 * time.Second,
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 5,
+			IdleConnTimeout:     30 * time.Second,
+			DisableKeepAlives:   false,
+		},
 	}
 
-	resp, err := client.Get(w.healthCheck)
+	// Create request with proper headers
+	req, err := http.NewRequest("GET", w.healthCheck, nil)
+	if err != nil {
+		if w.debug {
+			fmt.Printf("WOL Plugin [%s]: Health check request creation failed: %v\n", w.name, err)
+		}
+		return false
+	}
+	
+	// Add headers to avoid caching and identify the health checker
+	req.Header.Set("User-Agent", "Traefik-WOL-Plugin/"+PluginVersion)
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Connection", "keep-alive")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		if w.debug {
 			fmt.Printf("WOL Plugin [%s]: Health check failed: %v\n", w.name, err)
 		}
 		return false
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// Ensure body is read and closed for connection reuse
+		if resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
 
 	healthy := resp.StatusCode >= 200 && resp.StatusCode < 300
+	
+	// Log health status changes more intelligently
 	if w.debug {
-		fmt.Printf("WOL Plugin [%s]: Health check status: %d (healthy: %v)\n", w.name, resp.StatusCode, healthy)
+		fmt.Printf("WOL Plugin [%s]: Health check status: %d (healthy: %v) for %s\n", 
+			w.name, resp.StatusCode, healthy, w.healthCheck)
 	}
+	
 	return healthy
 }
 
@@ -863,15 +1123,25 @@ func (w *WOLPlugin) serveControlPage(rw http.ResponseWriter, req *http.Request) 
 	w.wakeMutex.Unlock()
 
 	data := struct {
-		Title           string
-		ServiceDescription string
-		OriginalURL     string
-		TimeoutSeconds  int
+		Title                string
+		ServiceDescription   string
+		OriginalURL          string
+		TimeoutSeconds       int
+		AutoRedirect         bool
+		RedirectDelaySeconds int
+		ConfirmPowerOff      bool
+		ShowPowerOffButton   bool
+		HideRedirectButton   bool
 	}{
-		Title:           w.controlPageTitle,
-		ServiceDescription: w.serviceDescription,
-		OriginalURL:     originalURL,
-		TimeoutSeconds:  int(w.timeout.Seconds()),
+		Title:                w.controlPageTitle,
+		ServiceDescription:   w.serviceDescription,
+		OriginalURL:          originalURL,
+		TimeoutSeconds:       int(w.timeout.Seconds()),
+		AutoRedirect:         w.autoRedirect,
+		RedirectDelaySeconds: int(w.redirectDelay.Seconds()),
+		ConfirmPowerOff:      w.confirmPowerOff,
+		ShowPowerOffButton:   w.showPowerOffButton,
+		HideRedirectButton:   w.hideRedirectButton,
 	}
 
 	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -889,16 +1159,21 @@ func (w *WOLPlugin) handleWakeEndpoint(rw http.ResponseWriter, req *http.Request
 	}
 
 	w.wakeMutex.Lock()
-	if w.wakeCache.isWaking {
+	if w.wakeCache.isWaking || w.wakeCache.isPoweringOff {
+		processType := "wake"
+		if w.wakeCache.isPoweringOff {
+			processType = "power-off"
+		}
 		w.wakeMutex.Unlock()
 		w.writeJSONResponse(rw, map[string]interface{}{
 			"success": false,
-			"message": "Wake process already in progress",
+			"message": fmt.Sprintf("%s process already in progress", processType),
 		})
 		return
 	}
 
 	w.wakeCache.isWaking = true
+	w.wakeCache.isPoweringOff = false
 	w.wakeCache.startTime = time.Now()
 	w.wakeCache.message = "Initiating wake sequence..."
 	w.wakeCache.progress = 0
@@ -927,10 +1202,11 @@ func (w *WOLPlugin) handleStatusEndpoint(rw http.ResponseWriter, req *http.Reque
 	w.wakeMutex.RUnlock()
 
 	response := map[string]interface{}{
-		"isHealthy": isHealthy,
-		"isWaking":  wakeStatus.isWaking,
-		"message":   wakeStatus.message,
-		"progress":  wakeStatus.progress,
+		"isHealthy":     isHealthy,
+		"isWaking":      wakeStatus.isWaking,
+		"isPoweringOff": wakeStatus.isPoweringOff,
+		"message":       wakeStatus.message,
+		"progress":      wakeStatus.progress,
 	}
 
 	w.writeJSONResponse(rw, response)
@@ -1059,4 +1335,189 @@ func (w *WOLPlugin) waitForServiceWithProgress() bool {
 		time.Sleep(checkInterval)
 	}
 	return false
+}
+
+// handlePowerOffEndpoint handles POST requests to /_wol/poweroff
+func (w *WOLPlugin) handlePowerOffEndpoint(rw http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.wakeMutex.Lock()
+	if w.wakeCache.isWaking || w.wakeCache.isPoweringOff {
+		processType := "power-off"
+		if w.wakeCache.isWaking {
+			processType = "wake"
+		}
+		w.wakeMutex.Unlock()
+		w.writeJSONResponse(rw, map[string]interface{}{
+			"success": false,
+			"message": fmt.Sprintf("%s process already in progress", processType),
+		})
+		return
+	}
+
+	w.wakeCache.isPoweringOff = true
+	w.wakeCache.isWaking = false
+	w.wakeCache.startTime = time.Now()
+	w.wakeCache.message = "Initiating power-off sequence..."
+	w.wakeCache.progress = 0
+	w.wakeMutex.Unlock()
+
+	// Start power-off process in background
+	go w.performPowerOffSequence()
+
+	w.writeJSONResponse(rw, map[string]interface{}{
+		"success": true,
+		"message": "Power-off process started",
+	})
+}
+
+// performPowerOffSequence executes the power-off command based on the configured method
+func (w *WOLPlugin) performPowerOffSequence() {
+	defer func() {
+		w.wakeMutex.Lock()
+		w.wakeCache.isPoweringOff = false
+		w.wakeMutex.Unlock()
+	}()
+
+	fmt.Printf("WOL Plugin [%s]: Starting power-off sequence using method: %s\n", w.name, w.powerOffMethod)
+
+	w.wakeMutex.Lock()
+	w.wakeCache.message = "Executing power-off command..."
+	w.wakeCache.progress = 10
+	w.wakeMutex.Unlock()
+
+	var err error
+	switch w.powerOffMethod {
+	case "ssh":
+		err = w.executePowerOffSSH()
+	case "ipmi":
+		err = w.executePowerOffIPMI()
+	case "custom":
+		err = w.executePowerOffCustom()
+	default:
+		err = fmt.Errorf("unknown power-off method: %s", w.powerOffMethod)
+	}
+
+	if err != nil {
+		fmt.Printf("WOL Plugin [%s]: Power-off failed: %v\n", w.name, err)
+		w.wakeMutex.Lock()
+		w.wakeCache.message = fmt.Sprintf("Power-off failed: %v", err)
+		w.wakeCache.progress = 0
+		w.wakeMutex.Unlock()
+		return
+	}
+
+	w.wakeMutex.Lock()
+	w.wakeCache.message = "Power-off command executed successfully"
+	w.wakeCache.progress = 100
+	w.wakeMutex.Unlock()
+
+	// Give some time for the service to actually go down
+	time.Sleep(5 * time.Second)
+
+	fmt.Printf("WOL Plugin [%s]: Power-off sequence completed\n", w.name)
+}
+
+// executePowerOffSSH executes power-off via SSH
+func (w *WOLPlugin) executePowerOffSSH() error {
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: Executing SSH power-off to %s@%s:%d\n", w.name, w.sshUser, w.sshHost, w.sshPort)
+	}
+
+	var cmd *exec.Cmd
+
+	if w.sshKeyPath != "" {
+		// Use SSH key authentication
+		cmd = exec.Command("ssh", 
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			"-o", "ConnectTimeout=10",
+			"-i", w.sshKeyPath,
+			"-p", fmt.Sprintf("%d", w.sshPort),
+			fmt.Sprintf("%s@%s", w.sshUser, w.sshHost),
+			w.powerOffCommand)
+	} else if w.sshPassword != "" {
+		// Use sshpass for password authentication
+		cmd = exec.Command("sshpass", 
+			"-p", w.sshPassword,
+			"ssh",
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+			"-o", "ConnectTimeout=10",
+			"-p", fmt.Sprintf("%d", w.sshPort),
+			fmt.Sprintf("%s@%s", w.sshUser, w.sshHost),
+			w.powerOffCommand)
+	} else {
+		return fmt.Errorf("neither SSH key nor password provided")
+	}
+
+	w.wakeMutex.Lock()
+	w.wakeCache.progress = 50
+	w.wakeMutex.Unlock()
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("SSH command failed: %v, output: %s", err, output)
+	}
+
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: SSH power-off output: %s\n", w.name, output)
+	}
+
+	return nil
+}
+
+// executePowerOffIPMI executes power-off via IPMI
+func (w *WOLPlugin) executePowerOffIPMI() error {
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: Executing IPMI power-off to %s\n", w.name, w.ipmiHost)
+	}
+
+	w.wakeMutex.Lock()
+	w.wakeCache.progress = 50
+	w.wakeMutex.Unlock()
+
+	cmd := exec.Command("ipmitool", 
+		"-I", "lanplus",
+		"-H", w.ipmiHost,
+		"-U", w.ipmiUser,
+		"-P", w.ipmiPassword,
+		"chassis", "power", "off")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("IPMI command failed: %v, output: %s", err, output)
+	}
+
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: IPMI power-off output: %s\n", w.name, output)
+	}
+
+	return nil
+}
+
+// executePowerOffCustom executes custom power-off command
+func (w *WOLPlugin) executePowerOffCustom() error {
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: Executing custom power-off command: %s\n", w.name, w.powerOffCommand)
+	}
+
+	w.wakeMutex.Lock()
+	w.wakeCache.progress = 50
+	w.wakeMutex.Unlock()
+
+	cmd := exec.Command("sh", "-c", w.powerOffCommand)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("custom command failed: %v, output: %s", err, output)
+	}
+
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: Custom power-off output: %s\n", w.name, output)
+	}
+
+	return nil
 }

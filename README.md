@@ -1,221 +1,201 @@
-# Traefik Wake-on-LAN Plugin
+# Traefik Power Management Plugin
 
-A robust Wake-on-LAN middleware plugin for Traefik that automatically wakes up sleeping services when they become unavailable.
+A comprehensive power management middleware plugin for Traefik that provides complete lifecycle control over your services - from automatic wake-up via Wake-on-LAN to secure remote shutdown via SSH, IPMI, or custom commands.
+
+## Table of Contents
+
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+- [Basic Configuration](#basic-configuration)
+- [Interactive Dashboard](#interactive-dashboard)
+- [Usage Examples](#usage-examples)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Support](#support)
 
 ## Features
 
-- **Health Check Monitoring**: Smart health check caching with configurable intervals to reduce redundant checks
-- **Automatic Wake-up**: Sends WOL magic packets when services are down
-- **Container-Optimized**: Enhanced broadcast packet delivery for containers, LXC, and Docker environments
-- **Multi-Interface Support**: Automatic network interface discovery and broadcast address calculation
-- **Configurable Retry Logic**: Customizable retry attempts and intervals
-- **Flexible MAC Address Support**: Accepts various MAC address formats (colon, dash, dot separated)
-- **Smart Logging**: State-change-only logging to reduce log spam when services are healthy
-- **Debug Logging**: Detailed logging for troubleshooting
-- **Enhanced Error Handling**: Robust error handling with informative messages
-- **Interactive Control Page**: Optional web interface for manual service control with real-time status updates
-- **Production Ready**: Designed for reliable operation in production environments
+### 🔋 Complete Power Lifecycle Management
+- **Wake-on-LAN (WOL)**: Automatic service wake-up via magic packets with multi-interface broadcasting
+- **Remote Shutdown**: Secure power-off capabilities via SSH, IPMI, or custom commands
+- **Power State Monitoring**: Real-time service health monitoring with smart caching
+- **Bi-directional Control**: Both wake-up and shutdown operations with progress tracking
 
-## Requirements
+### 🎛️ Interactive Dashboard
+- **Web-based Control Panel**: Beautiful, responsive interface for manual power management
+- **Real-time Status Updates**: Live progress indicators during wake/shutdown operations
+- **Security Controls**: Confirmation dialogs, credential protection, and secure command execution
+- **Mobile-Optimized**: Touch-friendly interface that works on all devices
 
-- **Traefik**: v2.3+ (plugin support required)
-- **Network**: Target devices must support Wake-on-LAN
-- **Permissions**: UDP socket access on port 9 (or configured port)
+### 🔐 Secure Remote Operations
+- **SSH Authentication**: Key-based or password authentication for secure command execution
+- **IPMI Support**: Direct BMC communication for enterprise hardware management
+- **Custom Commands**: Flexible command execution for specialized power management needs
+
+### 🌐 Network & Container Optimization
+- **Container-Native**: Enhanced support for Docker, LXC, and containerized environments
+- **Multi-Interface Broadcasting**: Automatic network discovery and broadcast packet delivery
+- **Smart Health Caching**: Configurable health check intervals with connection pooling
+
+## Quick Start
+
+### 1. Install the Plugin
+
+Add to your Traefik static configuration:
+
+```yaml
+experimental:
+  plugins:
+    traefik-power-management:
+      moduleName: "github.com/ottup/traefik-power-management"
+      version: "v3.0.0"
+```
+
+### 2. Configure the Middleware
+
+```yaml
+middlewares:
+  power-control:
+    plugin:
+      traefik-power-management:
+        healthCheck: "http://192.168.1.100:3000/health"
+        macAddress: "00:11:22:33:44:55"
+        enableControlPage: true
+```
+
+### 3. Apply to Your Routes
+
+```yaml
+http:
+  routers:
+    my-service:
+      rule: "Host(`service.example.com`)"
+      service: my-service
+      middlewares:
+        - power-control
+
+  services:
+    my-service:
+      loadBalancer:
+        servers:
+          - url: "http://192.168.1.100:3000"
+```
+
+### 4. Test the Setup
+
+1. Put your target device to sleep
+2. Access your service through Traefik
+3. Watch the magic happen! ✨
 
 ## Installation
 
 ### Method 1: Official Plugin Catalog (Recommended)
 
-**Note**: This method will be available once the plugin is approved by Traefik.
-
 Add the plugin to your Traefik static configuration:
 
-#### YAML Configuration
 ```yaml
 experimental:
   plugins:
-    traefik-wol:
-      moduleName: "github.com/ottup/traefik-wol"
-      version: "v2.1.0"
-```
-
-#### TOML Configuration
-```toml
-[experimental.plugins.traefik-wol]
-  moduleName = "github.com/ottup/traefik-wol"
-  version = "v2.1.0"
-```
-
-#### CLI Flags
-```bash
---experimental.plugins.traefik-wol.moduleName=github.com/ottup/traefik-wol
---experimental.plugins.traefik-wol.version=v2.1.0
+    traefik-power-management:
+      moduleName: "github.com/ottup/traefik-power-management"
+      version: "v3.0.0"
 ```
 
 ### Method 2: Local Development Plugin
 
 For development or private deployment:
 
-1. **Create Plugin Directory Structure**
-   ```bash
-   mkdir -p ./plugins-local/src/github.com/ottup/traefik-wol
-   ```
+```bash
+# Create plugin directory
+mkdir -p ./plugins-local/src/github.com/ottup/traefik-power-management
 
-2. **Download Plugin Source**
+# Clone the repository
+git clone https://github.com/ottup/traefik-power-management.git ./plugins-local/src/github.com/ottup/traefik-power-management
+```
 
-   Choose one of the following methods:
+Configure as local plugin:
 
-   #### Option A: Git Clone (Recommended)
-   ```bash
-   git clone https://github.com/ottup/traefik-wol.git ./plugins-local/src/github.com/ottup/traefik-wol
-   ```
+```yaml
+experimental:
+  localPlugins:
+    traefik-power-management:
+      moduleName: "github.com/ottup/traefik-power-management"
+```
 
-   #### Option B: Direct File Download (curl)
-   ```bash
-   cd ./plugins-local/src/github.com/ottup/traefik-wol
-   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/main.go -o main.go
-   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/go.mod -o go.mod
-   curl -L https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/.traefik.yml -o .traefik.yml
-   ```
+## Basic Configuration
 
-   #### Option C: Direct File Download (wget)
-   ```bash
-   cd ./plugins-local/src/github.com/ottup/traefik-wol
-   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/main.go
-   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/go.mod
-   wget https://raw.githubusercontent.com/ottup/traefik-wol/v2.1.0/.traefik.yml
-   ```
-
-   #### Option D: GitHub Archive Download (zip)
-   ```bash
-   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v2.1.0.zip -o traefik-wol.zip
-   unzip traefik-wol.zip
-   mv traefik-wol-2.1.0/* ./plugins-local/src/github.com/ottup/traefik-wol/
-   rm -rf traefik-wol.zip traefik-wol-2.1.0
-   ```
-
-   #### Option E: GitHub Archive Download (tarball)
-   ```bash
-   curl -L https://github.com/ottup/traefik-wol/archive/refs/tags/v2.1.0.tar.gz | tar -xz
-   mv traefik-wol-2.1.0/* ./plugins-local/src/github.com/ottup/traefik-wol/
-   rm -rf traefik-wol-2.1.0
-   ```
-
-   #### Option F: Manual Download
-   1. Visit: https://github.com/ottup/traefik-wol/releases/tag/v2.1.0
-   2. Download `Source code (zip)` or `Source code (tar.gz)`
-   3. Extract the archive
-   4. Copy `main.go`, `go.mod`, and `.traefik.yml` to `./plugins-local/src/github.com/ottup/traefik-wol/`
-
-   **Quick Reference - Choose Your Method:**
-   - **Git available**: Use Option A (git clone)
-   - **No git, have curl**: Use Option B (direct download)
-   - **No git, have wget**: Use Option C (direct download)
-   - **Want single archive**: Use Option D (zip) or E (tarball)
-   - **Browser only**: Use Option F (manual download)
-
-   **Required Files**: All methods must include `main.go`, `go.mod`, and `.traefik.yml`
-
-3. **Configure Static Configuration**
-
-   #### YAML Configuration
-   ```yaml
-   experimental:
-     localPlugins:
-       traefik-wol:
-         moduleName: "github.com/ottup/traefik-wol"
-   ```
-
-   #### TOML Configuration
-   ```toml
-   [experimental.localPlugins.traefik-wol]
-     moduleName = "github.com/ottup/traefik-wol"
-   ```
-
-4. **Restart Traefik**
-   
-   Plugins are loaded at startup, so restart is required after configuration changes.
-
-## Configuration
-
-### Basic Configuration
+### Minimal Configuration
 
 ```yaml
 middlewares:
-  wol-middleware:
+  power-middleware:
     plugin:
-      traefik-wol:
+      traefik-power-management:
+        healthCheck: "http://192.168.1.100:3000/health"  # Required
+        macAddress: "00:11:22:33:44:55"                   # Required
+```
+
+### Common Configuration Options
+
+```yaml
+middlewares:
+  power-management:
+    plugin:
+      traefik-power-management:
+        # Required settings
         healthCheck: "http://192.168.1.100:3000/health"
         macAddress: "00:11:22:33:44:55"
-        ipAddress: "192.168.1.100"
+        
+        # Enable interactive dashboard
+        enableControlPage: true
+        controlPageTitle: "Server Control"
+        serviceDescription: "Media Server"
+        
+        # Wake-on-LAN settings
+        timeout: "30"                    # Wake timeout in seconds
+        retryAttempts: "3"               # Number of retry attempts
+        healthCheckInterval: "10"        # Health check cache interval
+        
+        # Debug logging
+        debug: true
 ```
 
-### Complete Configuration with All Options
+### Power Management Configuration
 
+#### SSH-Based Shutdown
 ```yaml
 middlewares:
-  wol-middleware:
+  ssh-power:
     plugin:
-      traefik-wol:
-        healthCheck: "http://192.168.1.100:3000/health"  # Required: Health check endpoint
-        macAddress: "00:11:22:33:44:55"                   # Required: Target MAC address
-        ipAddress: "192.168.1.100"                        # Optional: Target IP address (used for unicast, fallback to broadcast)
-        broadcastAddress: "192.168.1.255"                 # Optional: Custom broadcast address
-        networkInterface: "eth0"                          # Optional: Specific network interface to use
-        port: "9"                                         # Optional: WOL port (default: 9)
-        timeout: "30"                                     # Optional: Wake timeout in seconds (default: 30)
-        retryAttempts: "3"                                # Optional: Number of retry attempts (default: 3)
-        retryInterval: "5"                                # Optional: Delay between retries in seconds (default: 5)
-        healthCheckInterval: "10"                         # Optional: Health check cache interval in seconds (default: 10)
-        debug: true                                       # Optional: Enable debug logging (default: false)
-        enableControlPage: true                           # Optional: Enable interactive control page (default: false)
-        controlPageTitle: "My Server Control"            # Optional: Control page title (default: "Service Control")
-        serviceDescription: "My Home Server"             # Optional: Service description shown on control page (default: "Service")
+      traefik-power-management:
+        healthCheck: "http://192.168.1.100:3000/health"
+        macAddress: "00:11:22:33:44:55"
+        enableControlPage: true
+        
+        # SSH power-off configuration
+        powerOffMethod: "ssh"
+        powerOffCommand: "sudo shutdown -h now"
+        sshHost: "192.168.1.100"
+        sshUser: "admin"
+        sshKeyPath: "/home/traefik/.ssh/id_rsa"
 ```
 
-### Alternative Configuration Formats
-
-#### TOML Configuration
-```toml
-[http.middlewares.wol-middleware.plugin.traefik-wol]
-  healthCheck = "http://192.168.1.100:3000/health"
-  macAddress = "00:11:22:33:44:55"
-  ipAddress = "192.168.1.100"
-  broadcastAddress = "192.168.1.255"
-  networkInterface = "eth0"
-  port = "9"
-  timeout = "30"
-  retryAttempts = "3"
-  retryInterval = "5"
-  healthCheckInterval = "10"
-  debug = true
-```
-
-#### JSON Configuration
-```json
-{
-  "http": {
-    "middlewares": {
-      "wol-middleware": {
-        "plugin": {
-          "traefik-wol": {
-            "healthCheck": "http://192.168.1.100:3000/health",
-            "macAddress": "00:11:22:33:44:55",
-            "ipAddress": "192.168.1.100",
-            "broadcastAddress": "192.168.1.255",
-            "networkInterface": "eth0",
-            "port": "9",
-            "timeout": "30",
-            "retryAttempts": "3",
-            "retryInterval": "5",
-            "healthCheckInterval": "10",
-            "debug": true
-          }
-        }
-      }
-    }
-  }
-}
+#### IPMI-Based Power Control
+```yaml
+middlewares:
+  ipmi-power:
+    plugin:
+      traefik-power-management:
+        healthCheck: "http://192.168.1.100:3000/health"
+        macAddress: "00:11:22:33:44:55"
+        enableControlPage: true
+        
+        # IPMI power-off configuration
+        powerOffMethod: "ipmi"
+        ipmiHost: "192.168.1.101"  # BMC/iDRAC address
+        ipmiUser: "ADMIN"
+        ipmiPassword: "admin123"
 ```
 
 ### MAC Address Formats
@@ -223,405 +203,183 @@ middlewares:
 The plugin accepts various MAC address formats:
 
 ```yaml
-# Colon-separated (most common)
-macAddress: "00:11:22:33:44:55"
-
-# Dash-separated
-macAddress: "00-11-22-33-44-55"
-
-# Dot-separated
-macAddress: "00.11.22.33.44.55"
-
-# No separators
-macAddress: "001122334455"
+macAddress: "00:11:22:33:44:55"  # Colon-separated (most common)
+macAddress: "00-11-22-33-44-55"  # Dash-separated
+macAddress: "00.11.22.33.44.55"  # Dot-separated
+macAddress: "001122334455"       # No separators
 ```
 
-### Container and Network Configuration
+## Interactive Dashboard
 
-The plugin is optimized for containerized environments (Docker, LXC, etc.) and includes enhanced networking features:
-
-#### Broadcast Packet Support
-- **Automatic Broadcast Discovery**: The plugin automatically detects available network interfaces and calculates broadcast addresses
-- **Container Compatibility**: Uses broadcast packets that can traverse container network boundaries
-- **Multi-Interface Support**: Sends WOL packets on all available network interfaces for maximum reliability
-
-#### Configuration Options
-
-```yaml
-# Basic configuration (recommended for most cases)
-middlewares:
-  wol-middleware:
-    plugin:
-      traefik-wol:
-        healthCheck: "http://192.168.1.100:3000/health"
-        macAddress: "00:11:22:33:44:55"
-        # ipAddress is now optional - broadcast will be used automatically
-
-# Advanced configuration for specific networking needs
-middlewares:
-  wol-advanced:
-    plugin:
-      traefik-wol:
-        healthCheck: "http://192.168.1.100:3000/health"
-        macAddress: "00:11:22:33:44:55"
-        ipAddress: "192.168.1.100"              # Optional: Try unicast first
-        broadcastAddress: "192.168.1.255"       # Optional: Custom broadcast address
-        networkInterface: "eth0"                # Optional: Use specific interface only
-        healthCheckInterval: "15"               # Optional: Cache health checks for 15s
-```
-
-#### Deployment Scenarios
-
-**Docker/Container Deployment:**
-```yaml
-# Minimal configuration - plugin auto-detects broadcast addresses
-middlewares:
-  wol-container:
-    plugin:
-      traefik-wol:
-        healthCheck: "http://target-service:3000/health"
-        macAddress: "00:11:22:33:44:55"
-        healthCheckInterval: "10"  # Reduce health check frequency
-```
-
-**LXC/VM Deployment:**
-```yaml
-# Use specific network interface for better control
-middlewares:
-  wol-lxc:
-    plugin:
-      traefik-wol:
-        healthCheck: "http://192.168.1.100:3000/health"
-        macAddress: "00:11:22:33:44:55"
-        networkInterface: "lxcbr0"  # LXC bridge interface
-        broadcastAddress: "192.168.1.255"
-```
-
-**Host Network Deployment:**
-```yaml
-# Traditional deployment with direct network access
-middlewares:
-  wol-host:
-    plugin:
-      traefik-wol:
-        healthCheck: "http://192.168.1.100:3000/health"
-        macAddress: "00:11:22:33:44:55"
-        ipAddress: "192.168.1.100"     # Direct unicast preferred
-        healthCheckInterval: "5"       # More frequent checks on stable network
-```
-
-## Interactive Control Page
-
-The plugin includes an optional interactive web interface that provides manual control over service wake-up operations. When enabled, instead of automatically waking services, users are presented with a beautiful control page with real-time status updates.
-
-### Features
-
-- **Manual Wake Control**: Users can trigger wake-on-LAN manually via a "Turn On Service" button
-- **Direct Access**: "Go to Service Anyway" button allows bypassing health checks
-- **Real-time Status Updates**: Live progress indicators showing wake-up progress and estimated time remaining
-- **Responsive Design**: Mobile-friendly interface that works on all devices
-- **Auto-redirect**: Automatic redirection to service once it's online
-- **Progress Feedback**: Detailed status messages showing what's happening in the background
-
-### Configuration
-
-Enable the control page by setting `enableControlPage: true`:
+Enable the interactive power control dashboard for manual power management:
 
 ```yaml
 middlewares:
-  wol-with-control:
+  dashboard-power:
     plugin:
-      traefik-wol:
+      traefik-power-management:
         healthCheck: "http://192.168.1.100:3000/health"
         macAddress: "00:11:22:33:44:55"
+        
+        # Enable dashboard
         enableControlPage: true
         controlPageTitle: "Home Server Control"
         serviceDescription: "Media Server"
+        
+        # Dashboard behavior
+        showPowerOffButton: true      # Show power-off button
+        confirmPowerOff: true         # Require confirmation
+        autoRedirect: false           # Manual control
+        
+        # Power-off configuration
+        powerOffMethod: "ssh"
+        sshHost: "192.168.1.100"
+        sshUser: "admin"
+        sshKeyPath: "/home/traefik/.ssh/id_rsa"
 ```
 
-### Control Page Endpoints
+### Dashboard Features
 
-When the control page is enabled, the plugin creates special endpoints:
+- **🔋 Power Controls**: Wake-up and power-off buttons with progress tracking
+- **📱 Mobile-Friendly**: Responsive design that works on all devices
+- **🔒 Security**: Confirmation dialogs and configurable button visibility
+- **⚡ Real-time Updates**: Live progress indicators during operations
 
-- **`/_wol/wake`** (POST): Triggers wake-on-LAN sequence
-- **`/_wol/status`** (GET): Returns JSON with current status and progress
-- **`/_wol/redirect`** (GET): Redirects to the original requested URL
+### API Endpoints
 
-### Behavior Differences
+When the dashboard is enabled, these endpoints are available:
 
-| Feature | Auto-Wake Mode (default) | Control Page Mode |
-|---------|-------------------------|-------------------|
-| Service Down | Automatically sends WOL packets | Shows control page interface |
-| User Interaction | None required | Manual "Turn On Service" button |
-| Progress Feedback | Server logs only | Real-time web interface |
-| Direct Access | Not available | "Go to Service Anyway" option |
-| Mobile Access | N/A | Responsive mobile interface |
+- `/_wol/wake` (POST): Trigger wake-on-LAN
+- `/_wol/poweroff` (POST): Initiate power-off
+- `/_wol/status` (GET): Get current status
+- `/_wol/redirect` (GET): Redirect to service
 
-### Example Control Page Flow
+## Usage Examples
 
-1. **User accesses service** → Service is down
-2. **Control page appears** → Shows service status as "offline"
-3. **User clicks "Turn On Service"** → WOL process begins
-4. **Real-time updates** → "Sending wake packet...", "Waiting for service...", progress bar
-5. **Service comes online** → "Service is online and ready!", auto-redirect after 3 seconds
-6. **User reaches service** → Normal service access
-
-## Usage
-
-### Step 1: Apply Middleware to Route
-
-Once the plugin is installed and configured, apply it to your routes:
-
-```yaml
-http:
-  routers:
-    my-service:
-      rule: "Host(`myservice.example.com`)"
-      service: my-service
-      middlewares:
-        - wol-middleware
-
-  services:
-    my-service:
-      loadBalancer:
-        servers:
-          - url: "http://192.168.1.100:3000"
-
-  middlewares:
-    wol-middleware:
-      plugin:
-        traefik-wol:
-          healthCheck: "http://192.168.1.100:3000/health"
-          macAddress: "00:11:22:33:44:55"
-          ipAddress: "192.168.1.100"
-          debug: true
-```
-
-### Step 2: Test the Plugin
-
-1. **Ensure Target Device Supports WOL**:
-   ```bash
-   # Check if WOL is enabled (Linux example)
-   sudo ethtool eth0 | grep Wake
-   ```
-
-2. **Test Health Check Endpoint**:
-   ```bash
-   curl http://192.168.1.100:3000/health
-   ```
-
-3. **Monitor Traefik Logs**:
-   ```bash
-   # Enable debug mode in plugin configuration to see detailed logs
-   docker logs -f traefik
-   ```
-
-### Step 3: Verify Wake-on-LAN Functionality
-
-1. **Put Target Device to Sleep**
-2. **Access Service Through Traefik**
-3. **Check Logs for Wake Attempts**:
-   ```
-   WOL Plugin [wol-middleware]: Service unhealthy, attempting to wake 00:11:22:33:44:55
-   WOL Plugin [wol-middleware]: Magic packet sent to 00:11:22:33:44:55 (192.168.1.100:9)
-   WOL Plugin [wol-middleware]: Service is now online
-   ```
-
-## Troubleshooting
-
-### Common Issues
-
-#### Plugin Not Loading
-- **Cause**: Incorrect module name or version
-- **Solution**: Verify `moduleName` matches exactly: `github.com/ottup/traefik-wol`
-- **Check**: Restart Traefik after configuration changes
-
-#### Health Check Failures
-- **Cause**: Incorrect health check URL or unreachable service
-- **Solution**: Test health endpoint manually:
-  ```bash
-  curl -v http://192.168.1.100:3000/health
-  ```
-- **Check**: Ensure endpoint returns HTTP 2xx status codes
-
-#### Wake-on-LAN Not Working
-- **Cause**: WOL not enabled on target device
-- **Solution**: Enable WOL in BIOS/UEFI and network adapter settings
-- **Check**: Test WOL manually:
-  ```bash
-  # Linux/Mac
-  wakeonlan 00:11:22:33:44:55
-  
-  # Windows
-  wolcmd 00:11:22:33:44:55 192.168.1.100
-  ```
-
-#### Container/LXC WOL Issues
-- **Cause**: Network isolation preventing WOL packets from reaching target
-- **Solution**: Use broadcast addresses instead of unicast:
-  ```yaml
-  # Remove ipAddress to force broadcast mode
-  middlewares:
-    wol-middleware:
-      plugin:
-        traefik-wol:
-          healthCheck: "http://192.168.1.100:3000/health"
-          macAddress: "00:11:22:33:44:55"
-          # ipAddress: "192.168.1.100"  # Comment out or remove
-          broadcastAddress: "192.168.1.255"  # Add specific broadcast
-  ```
-- **Check**: Enable debug mode to see packet delivery attempts
-
-#### Network Issues
-- **Cause**: Firewall blocking UDP traffic or incorrect network configuration
-- **Solution**: Ensure UDP port 9 is accessible and broadcast packets are allowed
-- **Container Networks**: Verify container can send broadcast packets:
-  ```bash
-  # Test from container
-  docker exec traefik ping -c 1 192.168.1.255
-  ```
-- **Check**: Test with different broadcast addresses if needed
-
-### Debug Mode
-
-Enable debug logging for detailed troubleshooting:
-
+### Home Media Server
 ```yaml
 middlewares:
-  wol-middleware:
+  media-power:
     plugin:
-      traefik-wol:
-        debug: true  # Enable verbose logging
+      traefik-power-management:
+        healthCheck: "http://media-server.local:8080/health"
+        macAddress: "00:11:22:33:44:55"
+        enableControlPage: true
+        controlPageTitle: "Media Server"
+        serviceDescription: "Plex Media Server"
+        autoRedirect: true
+        redirectDelay: "3"
 ```
 
-Debug logs include:
-- Health check attempts and results
-- Wake-on-LAN packet transmission details
-- Service wake-up monitoring progress
-- Error details and retry attempts
-
-### Log Examples
-
-**Successful Wake Operation**:
+### Enterprise Database Server
+```yaml
+middlewares:
+  db-power:
+    plugin:
+      traefik-power-management:
+        healthCheck: "https://db.internal:5432/health"
+        macAddress: "AA:BB:CC:DD:EE:FF"
+        enableControlPage: true
+        controlPageTitle: "Database Server"
+        
+        # IPMI for enterprise hardware
+        powerOffMethod: "ipmi"
+        ipmiHost: "db-bmc.internal"
+        ipmiUser: "ADMIN"
+        ipmiPassword: "${IPMI_PASSWORD}"
+        confirmPowerOff: true
+        hideRedirectButton: true  # Security
 ```
-WOL Plugin [wol-middleware]: Checking health for http://192.168.1.100:3000/health
-WOL Plugin [wol-middleware]: Health check failed: connection refused
-WOL Plugin [wol-middleware]: Service unhealthy, attempting to wake 00:11:22:33:44:55
-WOL Plugin [wol-middleware]: Wake attempt 1/3
-WOL Plugin [wol-middleware]: Magic packet sent to 00:11:22:33:44:55 (192.168.1.100:9)
-WOL Plugin [wol-middleware]: Waiting for service to come online (timeout: 30s)
-WOL Plugin [wol-middleware]: Health check status: 200 (healthy: true)
-WOL Plugin [wol-middleware]: Service is now online
+
+### Development Environment
+```yaml
+middlewares:
+  dev-power:
+    plugin:
+      traefik-power-management:
+        healthCheck: "http://dev.local:3000/health"
+        macAddress: "12:34:56:78:9A:BC"
+        enableControlPage: true
+        
+        # Custom shutdown script
+        powerOffMethod: "custom"
+        powerOffCommand: "/scripts/dev-shutdown.sh"
+        confirmPowerOff: false  # Skip confirmation for dev
+        debug: true            # Verbose logging
 ```
 
-## Best Practices
+## Testing
 
-### Security Considerations
+### 1. Verify Plugin Loading
+```bash
+# Check Traefik logs
+docker logs traefik | grep -i "traefik-wol"
+```
 
-- **Network Segmentation**: Deploy WOL functionality within trusted network segments
-- **Access Control**: Limit access to services that use WOL middleware
-- **Monitoring**: Enable logging to track wake events and potential security issues
-- **Health Check Security**: Ensure health check endpoints don't expose sensitive information
+### 2. Test Health Endpoint
+```bash
+# Test your health check URL
+curl -v http://192.168.1.100:3000/health
+```
 
-### Production Deployment
+### 3. Test Wake-on-LAN
+```bash
+# Check WOL is enabled on target device
+sudo ethtool eth0 | grep Wake
 
-- **Testing**: Thoroughly test in development environment before production deployment
-- **Monitoring**: Set up monitoring for failed wake attempts and service availability
-- **Backup Plans**: Have alternative access methods if WOL fails
-- **Network Dependencies**: Consider network infrastructure requirements and limitations
+# Test manual WOL
+wakeonlan 00:11:22:33:44:55
+```
 
-### Performance Optimization
+### 4. Test Power Management
+```bash
+# SSH method
+ssh -i /path/to/key user@target "sudo shutdown -h now"
 
-- **Health Check Frequency**: Balance between responsiveness and system load
-- **Timeout Configuration**: Set appropriate timeouts based on device wake-up times
-- **Retry Strategy**: Configure retry attempts based on network reliability
+# IPMI method
+ipmitool -I lanplus -H bmc-host -U admin -P password chassis power status
+```
 
-## Contributing
+### 5. Monitor Operation
+```bash
+# Watch Traefik logs for plugin activity
+docker logs -f traefik | grep "WOL Plugin"
+```
 
-Contributions are welcome! Please follow these guidelines:
+## Documentation
 
-1. **Fork the Repository**
-2. **Create Feature Branch**: `git checkout -b feature/your-feature`
-3. **Make Changes**: Follow Go coding standards and existing patterns
-4. **Add Tests**: Include tests for new functionality
-5. **Update Documentation**: Update README and inline comments
-6. **Submit Pull Request**: Include detailed description of changes
+For detailed information, see our comprehensive documentation:
 
-### Development Setup
+- **[Configuration Reference](CONFIGURATION.md)** - Complete configuration options and examples
+- **[Deployment Guide](DEPLOYMENT.md)** - Production deployment and security best practices
+- **[Troubleshooting Guide](TROUBLESHOOTING.md)** - Common issues and solutions
+- **[Changelog](CHANGELOG.md)** - Version history and breaking changes
+- **[Contributing Guide](CONTRIBUTING.md)** - How to contribute to the project
 
-1. **Prerequisites**: Go 1.21+ installed
-2. **Clone Repository**: `git clone https://github.com/ottup/traefik-wol.git`
-3. **Install Dependencies**: `go mod tidy`
-4. **Run Tests**: `go test ./...`
-5. **Build Plugin**: `go build .`
+## Requirements
 
-### Code Standards
+- **Traefik**: v2.3+ (plugin support required)
+- **Target Device**: Must support Wake-on-LAN
+- **Network Access**: UDP port 9 (or configured port)
+- **Optional**: SSH client, ipmitool, or custom commands for power-off
 
-- Follow standard Go formatting (`go fmt`)
-- Include comprehensive error handling
-- Add meaningful comments for complex logic
-- Maintain backward compatibility when possible
+## Support
+
+- **🐛 Issues**: Report bugs via [GitHub Issues](https://github.com/ottup/traefik-power-management/issues)
+- **💬 Discussions**: Ask questions in [GitHub Discussions](https://github.com/ottup/traefik-power-management/discussions)
+- **📚 Documentation**: Comprehensive guides in the repository
+- **🏘️ Community**: Join Traefik community for general support
 
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-- **Issues**: Report bugs and feature requests via [GitHub Issues](https://github.com/ottup/traefik-wol/issues)
-- **Documentation**: Additional documentation available in the repository
-- **Community**: Join Traefik community discussions for general plugin support
-
-## Changelog
-
-### v2.1.0
-- **Interactive Control Page**: Optional web interface for manual WOL control instead of automatic wake-up
-- **Real-time Status Updates**: Live progress indicators with detailed status messages during wake process
-- **Responsive Design**: Mobile-friendly interface with modern CSS animations and touch-optimized controls
-- **Manual Wake Control**: "Turn On Service" button triggers WOL with progress tracking
-- **Direct Access Option**: "Go to Service Anyway" button bypasses health checks for immediate access
-- **REST API Endpoints**: New `/_wol/wake`, `/_wol/status`, and `/_wol/redirect` endpoints for control page functionality
-- **Background Processing**: Non-blocking WOL operations with real-time progress updates via JavaScript polling
-- **Backward Compatibility**: Control page is disabled by default, preserving existing auto-wake behavior
-- **Enhanced Documentation**: Comprehensive guide for control page configuration and usage
-- **New Configuration Options**:
-  - `enableControlPage`: Enable/disable the interactive control page
-  - `controlPageTitle`: Customize the page title
-  - `serviceDescription`: Set service description shown on control page
-
-### v2.0.1
-- **Bugfix**: Fix Yaegi interpreter compatibility issue with UDP socket type assertion
-- **Plugin Loading**: Resolve plugin loading failure that prevented middleware from being available
-- **Compatibility**: Ensure plugin works properly in Traefik's Yaegi environment
-- **Note**: All v2.0.0 features remain fully functional (broadcast support, caching, container optimization)
-
-### v2.0.0
-- **Container/LXC Optimization**: Enhanced WOL packet delivery for containerized environments
-- **Broadcast Support**: Automatic network interface discovery and broadcast address calculation
-- **Smart Health Check Caching**: Configurable health check intervals to reduce redundant checks
-- **State-Change Logging**: Reduced log spam by only logging on health state changes
-- **Multi-Interface Support**: Send WOL packets on multiple network interfaces for maximum reliability
-- **New Configuration Options**:
-  - `broadcastAddress`: Custom broadcast address configuration
-  - `networkInterface`: Specific network interface selection
-  - `healthCheckInterval`: Configurable health check cache interval
-- **Breaking Changes**: 
-  - `ipAddress` is now optional (will fallback to broadcast if not provided)
-  - Health check behavior changed to use caching (may affect very rapid health state changes)
-
-### v1.0.1
-- Fixed package naming issue for proper plugin loading
-- Enhanced error handling and logging
-- Improved MAC address format validation
-
-### v1.0.0
-- Initial release
-- Core WOL functionality with health checking
-- Configurable retry logic and timeouts
-- Support for multiple MAC address formats
 
 ## Acknowledgments
 
 - **Traefik Team**: For the excellent reverse proxy and plugin system
 - **Go Community**: For comprehensive standard library and ecosystem
 - **Contributors**: Thanks to all contributors who help improve this plugin
+
+---
+
+**Ready to get started?** Check out our [Configuration Reference](CONFIGURATION.md) for detailed setup instructions!
