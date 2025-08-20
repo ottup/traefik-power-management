@@ -1,20 +1,6 @@
 // Package traefik_power_management implements a comprehensive power management middleware plugin for Traefik.
 package traefik_power_management
 
-const (
-	// PluginVersion represents the current version of the plugin
-	PluginVersion = "3.0.0"
-	
-	// DefaultPort is the default WOL UDP port
-	DefaultPort = 9
-	
-	// DefaultTimeout is the default wake timeout in seconds
-	DefaultTimeout = 30
-	
-	// DefaultRetryAttempts is the default number of wake retry attempts
-	DefaultRetryAttempts = 3
-)
-
 import (
 	"context"
 	"encoding/json"
@@ -28,6 +14,20 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	// PluginVersion represents the current version of the plugin
+	PluginVersion = "3.0.1"
+	
+	// DefaultPort is the default WOL UDP port
+	DefaultPort = 9
+	
+	// DefaultTimeout is the default wake timeout in seconds
+	DefaultTimeout = 30
+	
+	// DefaultRetryAttempts is the default number of wake retry attempts
+	DefaultRetryAttempts = 3
 )
 
 // Config holds the plugin configuration.

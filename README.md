@@ -49,7 +49,7 @@ experimental:
   plugins:
     traefik-power-management:
       moduleName: "github.com/ottup/traefik-power-management"
-      version: "v3.0.0"
+      version: "v3.0.1"
 ```
 
 ### 2. Configure the Middleware
@@ -92,6 +92,8 @@ http:
 
 ### Method 1: Official Plugin Catalog (Recommended)
 
+> **Note**: Use v3.0.1 which fixes a critical Go syntax error that prevented v3.0.0 from loading.
+
 Add the plugin to your Traefik static configuration:
 
 ```yaml
@@ -99,7 +101,7 @@ experimental:
   plugins:
     traefik-power-management:
       moduleName: "github.com/ottup/traefik-power-management"
-      version: "v3.0.0"
+      version: "v3.0.1"
 ```
 
 ### Method 2: Local Development Plugin
