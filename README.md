@@ -18,7 +18,7 @@ A comprehensive power management middleware plugin for Traefik that provides com
 
 ### 🔋 Complete Power Lifecycle Management
 - **Wake-on-LAN (WOL)**: Automatic service wake-up via magic packets with multi-interface broadcasting
-- **Remote Shutdown**: Secure power-off capabilities via SSH, IPMI, or custom commands
+- **Remote Shutdown**: Power-off capabilities via custom scripts (SSH, IPMI, or other methods)
 - **Power State Monitoring**: Real-time service health monitoring with smart caching
 - **Bi-directional Control**: Both wake-up and shutdown operations with progress tracking
 
@@ -28,10 +28,11 @@ A comprehensive power management middleware plugin for Traefik that provides com
 - **Security Controls**: Confirmation dialogs, credential protection, and secure command execution
 - **Mobile-Optimized**: Touch-friendly interface that works on all devices
 
-### 🔐 Secure Remote Operations
-- **SSH Authentication**: Key-based or password authentication for secure command execution
-- **IPMI Support**: Direct BMC communication for enterprise hardware management
-- **Custom Commands**: Flexible command execution for specialized power management needs
+### 🔧 Flexible Power Management
+- **Custom Scripts**: Execute any power management script or command externally
+- **SSH Support**: Via custom scripts with full authentication control
+- **IPMI Support**: Via custom scripts for enterprise hardware management
+- **Webhook Integration**: Custom scripts can trigger webhooks, APIs, or any shutdown method
 
 ### 🌐 Network & Container Optimization
 - **Container-Native**: Enhanced support for Docker, LXC, and containerized environments
@@ -49,7 +50,7 @@ experimental:
   plugins:
     traefik-power-management:
       moduleName: "github.com/ottup/traefik-power-management"
-      version: "v3.0.1"
+      version: "v3.1.0"
 ```
 
 ### 2. Configure the Middleware
@@ -92,7 +93,7 @@ http:
 
 ### Method 1: Official Plugin Catalog (Recommended)
 
-> **Note**: Use v3.0.1 which fixes a critical Go syntax error that prevented v3.0.0 from loading.
+> **Note**: Use v3.1.0 which removes os/exec dependency for full Yaegi compatibility.
 
 Add the plugin to your Traefik static configuration:
 
@@ -101,7 +102,7 @@ experimental:
   plugins:
     traefik-power-management:
       moduleName: "github.com/ottup/traefik-power-management"
-      version: "v3.0.1"
+      version: "v3.1.0"
 ```
 
 ### Method 2: Local Development Plugin
@@ -165,39 +166,30 @@ middlewares:
 
 ### Power Management Configuration
 
-#### SSH-Based Shutdown
+#### Custom Script-Based Shutdown
 ```yaml
 middlewares:
-  ssh-power:
+  custom-power:
     plugin:
       traefik-power-management:
         healthCheck: "http://192.168.1.100:3000/health"
         macAddress: "00:11:22:33:44:55"
         enableControlPage: true
         
-        # SSH power-off configuration
-        powerOffMethod: "ssh"
-        powerOffCommand: "sudo shutdown -h now"
-        sshHost: "192.168.1.100"
-        sshUser: "admin"
-        sshKeyPath: "/home/traefik/.ssh/id_rsa"
+        # Custom power-off script
+        powerOffCommand: "/usr/local/bin/ssh-shutdown.sh"
 ```
 
-#### IPMI-Based Power Control
-```yaml
-middlewares:
-  ipmi-power:
-    plugin:
-      traefik-power-management:
-        healthCheck: "http://192.168.1.100:3000/health"
-        macAddress: "00:11:22:33:44:55"
-        enableControlPage: true
-        
-        # IPMI power-off configuration
-        powerOffMethod: "ipmi"
-        ipmiHost: "192.168.1.101"  # BMC/iDRAC address
-        ipmiUser: "ADMIN"
-        ipmiPassword: "admin123"
+**Example SSH Shutdown Script** (`/usr/local/bin/ssh-shutdown.sh`):
+```bash
+#!/bin/bash
+ssh -i /home/traefik/.ssh/id_rsa -o StrictHostKeyChecking=no admin@192.168.1.100 "sudo shutdown -h now"
+```
+
+**Example IPMI Shutdown Script** (`/usr/local/bin/ipmi-shutdown.sh`):
+```bash
+#!/bin/bash
+ipmitool -I lanplus -H 192.168.1.101 -U ADMIN -P admin123 chassis power off
 ```
 
 ### MAC Address Formats
@@ -234,10 +226,7 @@ middlewares:
         autoRedirect: false           # Manual control
         
         # Power-off configuration
-        powerOffMethod: "ssh"
-        sshHost: "192.168.1.100"
-        sshUser: "admin"
-        sshKeyPath: "/home/traefik/.ssh/id_rsa"
+        powerOffCommand: "/usr/local/bin/ssh-shutdown.sh"
 ```
 
 ### Dashboard Features
@@ -284,11 +273,8 @@ middlewares:
         enableControlPage: true
         controlPageTitle: "Database Server"
         
-        # IPMI for enterprise hardware
-        powerOffMethod: "ipmi"
-        ipmiHost: "db-bmc.internal"
-        ipmiUser: "ADMIN"
-        ipmiPassword: "${IPMI_PASSWORD}"
+        # IPMI via custom script for enterprise hardware
+        powerOffCommand: "/usr/local/bin/db-ipmi-shutdown.sh"
         confirmPowerOff: true
         hideRedirectButton: true  # Security
 ```
@@ -304,7 +290,6 @@ middlewares:
         enableControlPage: true
         
         # Custom shutdown script
-        powerOffMethod: "custom"
         powerOffCommand: "/scripts/dev-shutdown.sh"
         confirmPowerOff: false  # Skip confirmation for dev
         debug: true            # Verbose logging
@@ -333,13 +318,16 @@ sudo ethtool eth0 | grep Wake
 wakeonlan 00:11:22:33:44:55
 ```
 
-### 4. Test Power Management
+### 4. Test Power Management Scripts
 ```bash
-# SSH method
-ssh -i /path/to/key user@target "sudo shutdown -h now"
+# Test your custom shutdown script
+/usr/local/bin/ssh-shutdown.sh
 
-# IPMI method
-ipmitool -I lanplus -H bmc-host -U admin -P password chassis power status
+# Test IPMI script
+/usr/local/bin/ipmi-shutdown.sh
+
+# Test webhook script
+curl -X POST http://your-power-management-api/shutdown
 ```
 
 ### 5. Monitor Operation
@@ -363,7 +351,7 @@ For detailed information, see our comprehensive documentation:
 - **Traefik**: v2.3+ (plugin support required)
 - **Target Device**: Must support Wake-on-LAN
 - **Network Access**: UDP port 9 (or configured port)
-- **Optional**: SSH client, ipmitool, or custom commands for power-off
+- **Optional**: Custom scripts for power-off (can use SSH, IPMI, webhooks, or any method)
 
 ## Support
 

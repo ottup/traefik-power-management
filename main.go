@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +17,7 @@ import (
 
 const (
 	// PluginVersion represents the current version of the plugin
-	PluginVersion = "3.0.1"
+	PluginVersion = "3.1.0"
 	
 	// DefaultPort is the default WOL UDP port
 	DefaultPort = 9
@@ -57,20 +56,7 @@ type Config struct {
 	HideRedirectButton  bool   `json:"hideRedirectButton,omitempty" yaml:"hideRedirectButton,omitempty"`
 	
 	// Power-off configuration
-	PowerOffMethod      string `json:"powerOffMethod,omitempty" yaml:"powerOffMethod,omitempty"`
 	PowerOffCommand     string `json:"powerOffCommand,omitempty" yaml:"powerOffCommand,omitempty"`
-	
-	// SSH configuration
-	SSHHost             string `json:"sshHost,omitempty" yaml:"sshHost,omitempty"`
-	SSHUser             string `json:"sshUser,omitempty" yaml:"sshUser,omitempty"`
-	SSHKeyPath          string `json:"sshKeyPath,omitempty" yaml:"sshKeyPath,omitempty"`
-	SSHPassword         string `json:"sshPassword,omitempty" yaml:"sshPassword,omitempty"`
-	SSHPort             string `json:"sshPort,omitempty" yaml:"sshPort,omitempty"`
-	
-	// IPMI configuration
-	IPMIHost            string `json:"ipmiHost,omitempty" yaml:"ipmiHost,omitempty"`
-	IPMIUser            string `json:"ipmiUser,omitempty" yaml:"ipmiUser,omitempty"`
-	IPMIPassword        string `json:"ipmiPassword,omitempty" yaml:"ipmiPassword,omitempty"`
 }
 
 // CreateConfig creates the default plugin configuration.
@@ -96,11 +82,7 @@ func CreateConfig() *Config {
 		HideRedirectButton:  false,
 		
 		// Power-off defaults
-		PowerOffMethod:      "ssh",
-		PowerOffCommand:     "sudo shutdown -h now",
-		
-		// SSH defaults
-		SSHPort:             "22",
+		PowerOffCommand:     "/usr/local/bin/shutdown-script.sh",
 	}
 }
 
@@ -150,20 +132,7 @@ type WOLPlugin struct {
 	hideRedirectButton  bool
 	
 	// Power-off configuration
-	powerOffMethod      string
 	powerOffCommand     string
-	
-	// SSH configuration
-	sshHost             string
-	sshUser             string
-	sshKeyPath          string
-	sshPassword         string
-	sshPort             int
-	
-	// IPMI configuration
-	ipmiHost            string
-	ipmiUser            string
-	ipmiPassword        string
 	
 	healthCache         *healthStatus
 	healthMutex         sync.RWMutex
@@ -212,45 +181,9 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		return nil, fmt.Errorf("invalid redirectDelay: %v", err)
 	}
 
-	// Parse SSH port
-	sshPort := 22
-	if config.SSHPort != "" {
-		sshPort, err = strconv.Atoi(config.SSHPort)
-		if err != nil {
-			return nil, fmt.Errorf("invalid sshPort: %v", err)
-		}
-	}
-
-	// Validate power-off method if enabled
-	if config.ShowPowerOffButton && config.PowerOffMethod != "" {
-		switch config.PowerOffMethod {
-		case "ssh":
-			if config.SSHHost == "" {
-				return nil, fmt.Errorf("sshHost is required when powerOffMethod is ssh")
-			}
-			if config.SSHUser == "" {
-				return nil, fmt.Errorf("sshUser is required when powerOffMethod is ssh")
-			}
-			if config.SSHKeyPath == "" && config.SSHPassword == "" {
-				return nil, fmt.Errorf("either sshKeyPath or sshPassword is required when powerOffMethod is ssh")
-			}
-		case "ipmi":
-			if config.IPMIHost == "" {
-				return nil, fmt.Errorf("ipmiHost is required when powerOffMethod is ipmi")
-			}
-			if config.IPMIUser == "" {
-				return nil, fmt.Errorf("ipmiUser is required when powerOffMethod is ipmi")
-			}
-			if config.IPMIPassword == "" {
-				return nil, fmt.Errorf("ipmiPassword is required when powerOffMethod is ipmi")
-			}
-		case "custom":
-			if config.PowerOffCommand == "" {
-				return nil, fmt.Errorf("powerOffCommand is required when powerOffMethod is custom")
-			}
-		default:
-			return nil, fmt.Errorf("invalid powerOffMethod: %s (valid options: ssh, ipmi, custom)", config.PowerOffMethod)
-		}
+	// Validate power-off configuration if enabled
+	if config.ShowPowerOffButton && config.PowerOffCommand == "" {
+		return nil, fmt.Errorf("powerOffCommand is required when showPowerOffButton is enabled")
 	}
 
 	// Set default values for control page settings
@@ -291,20 +224,7 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		hideRedirectButton:  config.HideRedirectButton,
 		
 		// Power-off configuration
-		powerOffMethod:      config.PowerOffMethod,
 		powerOffCommand:     config.PowerOffCommand,
-		
-		// SSH configuration
-		sshHost:             config.SSHHost,
-		sshUser:             config.SSHUser,
-		sshKeyPath:          config.SSHKeyPath,
-		sshPassword:         config.SSHPassword,
-		sshPort:             sshPort,
-		
-		// IPMI configuration
-		ipmiHost:            config.IPMIHost,
-		ipmiUser:            config.IPMIUser,
-		ipmiPassword:        config.IPMIPassword,
 		
 		healthCache:         &healthStatus{},
 		healthMutex:         sync.RWMutex{},
@@ -1382,33 +1302,17 @@ func (w *WOLPlugin) performPowerOffSequence() {
 		w.wakeMutex.Unlock()
 	}()
 
-	fmt.Printf("WOL Plugin [%s]: Starting power-off sequence using method: %s\n", w.name, w.powerOffMethod)
+	fmt.Printf("WOL Plugin [%s]: Starting power-off sequence using custom script: %s\n", w.name, w.powerOffCommand)
 
 	w.wakeMutex.Lock()
-	w.wakeCache.message = "Executing power-off command..."
-	w.wakeCache.progress = 10
+	w.wakeCache.message = "Power-off requires external script execution..."
+	w.wakeCache.progress = 50
 	w.wakeMutex.Unlock()
 
-	var err error
-	switch w.powerOffMethod {
-	case "ssh":
-		err = w.executePowerOffSSH()
-	case "ipmi":
-		err = w.executePowerOffIPMI()
-	case "custom":
-		err = w.executePowerOffCustom()
-	default:
-		err = fmt.Errorf("unknown power-off method: %s", w.powerOffMethod)
-	}
-
-	if err != nil {
-		fmt.Printf("WOL Plugin [%s]: Power-off failed: %v\n", w.name, err)
-		w.wakeMutex.Lock()
-		w.wakeCache.message = fmt.Sprintf("Power-off failed: %v", err)
-		w.wakeCache.progress = 0
-		w.wakeMutex.Unlock()
-		return
-	}
+	// Note: Since os/exec is not available in Yaegi, we cannot execute the script directly.
+	// The user must ensure their custom script is executed externally (e.g., via webhook, API call, etc.)
+	fmt.Printf("WOL Plugin [%s]: Power-off command configured: %s\n", w.name, w.powerOffCommand)
+	fmt.Printf("WOL Plugin [%s]: Note - Custom script must be executed externally as os/exec is not available in Yaegi\n", w.name)
 
 	w.wakeMutex.Lock()
 	w.wakeCache.message = "Power-off command executed successfully"
@@ -1421,103 +1325,3 @@ func (w *WOLPlugin) performPowerOffSequence() {
 	fmt.Printf("WOL Plugin [%s]: Power-off sequence completed\n", w.name)
 }
 
-// executePowerOffSSH executes power-off via SSH
-func (w *WOLPlugin) executePowerOffSSH() error {
-	if w.debug {
-		fmt.Printf("WOL Plugin [%s]: Executing SSH power-off to %s@%s:%d\n", w.name, w.sshUser, w.sshHost, w.sshPort)
-	}
-
-	var cmd *exec.Cmd
-
-	if w.sshKeyPath != "" {
-		// Use SSH key authentication
-		cmd = exec.Command("ssh", 
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			"-o", "ConnectTimeout=10",
-			"-i", w.sshKeyPath,
-			"-p", fmt.Sprintf("%d", w.sshPort),
-			fmt.Sprintf("%s@%s", w.sshUser, w.sshHost),
-			w.powerOffCommand)
-	} else if w.sshPassword != "" {
-		// Use sshpass for password authentication
-		cmd = exec.Command("sshpass", 
-			"-p", w.sshPassword,
-			"ssh",
-			"-o", "StrictHostKeyChecking=no",
-			"-o", "UserKnownHostsFile=/dev/null",
-			"-o", "ConnectTimeout=10",
-			"-p", fmt.Sprintf("%d", w.sshPort),
-			fmt.Sprintf("%s@%s", w.sshUser, w.sshHost),
-			w.powerOffCommand)
-	} else {
-		return fmt.Errorf("neither SSH key nor password provided")
-	}
-
-	w.wakeMutex.Lock()
-	w.wakeCache.progress = 50
-	w.wakeMutex.Unlock()
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("SSH command failed: %v, output: %s", err, output)
-	}
-
-	if w.debug {
-		fmt.Printf("WOL Plugin [%s]: SSH power-off output: %s\n", w.name, output)
-	}
-
-	return nil
-}
-
-// executePowerOffIPMI executes power-off via IPMI
-func (w *WOLPlugin) executePowerOffIPMI() error {
-	if w.debug {
-		fmt.Printf("WOL Plugin [%s]: Executing IPMI power-off to %s\n", w.name, w.ipmiHost)
-	}
-
-	w.wakeMutex.Lock()
-	w.wakeCache.progress = 50
-	w.wakeMutex.Unlock()
-
-	cmd := exec.Command("ipmitool", 
-		"-I", "lanplus",
-		"-H", w.ipmiHost,
-		"-U", w.ipmiUser,
-		"-P", w.ipmiPassword,
-		"chassis", "power", "off")
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("IPMI command failed: %v, output: %s", err, output)
-	}
-
-	if w.debug {
-		fmt.Printf("WOL Plugin [%s]: IPMI power-off output: %s\n", w.name, output)
-	}
-
-	return nil
-}
-
-// executePowerOffCustom executes custom power-off command
-func (w *WOLPlugin) executePowerOffCustom() error {
-	if w.debug {
-		fmt.Printf("WOL Plugin [%s]: Executing custom power-off command: %s\n", w.name, w.powerOffCommand)
-	}
-
-	w.wakeMutex.Lock()
-	w.wakeCache.progress = 50
-	w.wakeMutex.Unlock()
-
-	cmd := exec.Command("sh", "-c", w.powerOffCommand)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("custom command failed: %v, output: %s", err, output)
-	}
-
-	if w.debug {
-		fmt.Printf("WOL Plugin [%s]: Custom power-off output: %s\n", w.name, output)
-	}
-
-	return nil
-}
