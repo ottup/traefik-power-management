@@ -101,12 +101,8 @@ middlewares:
         hideRedirectButton: true
         showPowerOffButton: true  # But require confirmation
         
-        # Secure SSH configuration
-        powerOffMethod: "ssh"
-        sshHost: "192.168.1.100"
-        sshUser: "powerctl"
-        sshKeyPath: "/secrets/power-mgmt-key"
-        sshPort: "2222"  # Non-standard SSH port
+        # Custom power-off script configuration
+        powerOffCommand: "/usr/local/bin/secure-shutdown.sh"
         
         # Minimal auto-redirect
         autoRedirect: false
@@ -117,18 +113,20 @@ middlewares:
 
 ### 🚀 Environment Preparation
 
-#### Container Dependencies
-Ensure required tools are available in your Traefik container:
+#### Custom Script Dependencies
+Since power-off functionality uses external scripts, ensure your shutdown automation is set up:
 
 ```dockerfile
-# For SSH power-off
-RUN apt-get update && apt-get install -y openssh-client sshpass
+# Example: Add script monitoring to Traefik container
+COPY scripts/monitor-poweroff.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/monitor-poweroff.sh
 
-# For IPMI power-off  
-RUN apt-get install -y ipmitool
-
-# Clean up to reduce image size
-RUN apt-get clean && rm -rf /var/lib/apt/lists/*
+# Install tools for your specific shutdown method
+RUN apt-get update && apt-get install -y \
+    openssh-client \  # For SSH scripts
+    ipmitool \        # For IPMI scripts  
+    curl \            # For webhook scripts
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 ```
 
 #### Container Networking
@@ -183,17 +181,22 @@ services:
 ```
 
 #### Configuration Validation
-Test all power-off methods before production deployment:
+Test your custom shutdown scripts before production deployment:
 
 ```bash
-# Test SSH connection
+# Test your custom shutdown script directly
+/usr/local/bin/shutdown-script.sh
+
+# Example: Test SSH-based script
 ssh -i /path/to/key user@target "sudo shutdown -h now"
 
-# Test IPMI connection
-ipmitool -I lanplus -H target-bmc -U admin -P password chassis power status
+# Example: Test IPMI-based script
+ipmitool -I lanplus -H target-bmc -U admin -P password chassis power off
 
-# Test custom command
-/path/to/custom/command --test
+# Example: Test webhook-based script  
+curl -X POST https://automation-api.internal/shutdown
+
+# Note: Plugin only logs commands - external execution required
 ```
 
 #### Health Check Reliability
@@ -328,10 +331,7 @@ middlewares:
       traefik-wol:
         healthCheck: "http://primary.internal:8080/health"
         macAddress: "AA:BB:CC:DD:EE:FF"
-        powerOffMethod: "ipmi"
-        ipmiHost: "primary-bmc.internal"
-        ipmiUser: "ADMIN"
-        ipmiPassword: "${PRIMARY_IPMI_PASSWORD}"
+        powerOffCommand: "/usr/local/bin/primary-ipmi-shutdown.sh"
         confirmPowerOff: true
         enableControlPage: true
 
@@ -342,10 +342,7 @@ middlewares:
       traefik-wol:
         healthCheck: "http://backup.internal:8080/health"
         macAddress: "11:22:33:44:55:66"
-        powerOffMethod: "ssh"
-        sshHost: "backup.internal"
-        sshUser: "admin"
-        sshKeyPath: "/secrets/backup-key"
+        powerOffCommand: "/usr/local/bin/backup-ssh-shutdown.sh"
 ```
 
 ### 🔄 Environment-Specific Configurations
@@ -382,11 +379,8 @@ middlewares:
         debug: true               # Keep debug for testing
         healthCheckInterval: "10"
         
-        # SSH configuration
-        powerOffMethod: "ssh"
-        sshHost: "staging-server"
-        sshUser: "deploy"
-        sshKeyPath: "/secrets/staging-key"
+        # Custom script configuration
+        powerOffCommand: "/usr/local/bin/staging-shutdown.sh"
 ```
 
 #### Production Environment
@@ -405,11 +399,8 @@ middlewares:
         debug: false              # Minimal logging for security
         healthCheckInterval: "15"  # Reduced frequency
         
-        # IPMI for enterprise hardware
-        powerOffMethod: "ipmi"
-        ipmiHost: "prod-bmc.internal"
-        ipmiUser: "POWERCTL"
-        ipmiPassword: "${PROD_IPMI_PASSWORD}"
+        # Custom script for enterprise hardware
+        powerOffCommand: "/usr/local/bin/prod-ipmi-shutdown.sh"
 ```
 
 ### 🔒 Security Tiers

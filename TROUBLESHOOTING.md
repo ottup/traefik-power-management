@@ -33,7 +33,7 @@ experimental:
   plugins:
     traefik-power-management:
       moduleName: "github.com/ottup/traefik-power-management"  # Must match exactly
-      version: "v3.0.0"
+      version: "v3.1.0"
 ```
 
 #### Plugin Not Reloaded
@@ -205,173 +205,99 @@ netsh advfirewall firewall add rule name="Wake-on-LAN" dir=in action=allow proto
 
 ## Power Management Issues
 
-### SSH Power-Off Failures
+### Custom Script Power-Off Failures
+
+**Important:** Due to Yaegi interpreter limitations, the plugin cannot execute commands directly. Power-off functionality requires external script execution (webhooks, cron jobs, or API calls).
 
 **Symptoms:**
-- Power-off button doesn't work
-- SSH authentication errors
-- Permission denied errors
+- Power-off button shows no effect
+- Custom scripts don't execute
+- No actual shutdown occurs
 
 **Causes & Solutions:**
 
-#### SSH Authentication Issues
+#### Script Not Being Called Externally
 
-**Test SSH Connection:**
+The plugin only logs the configured command - it doesn't execute it. You need to implement external execution:
+
+**Webhook Approach:**
 ```bash
-# Test with the exact parameters from your configuration
-ssh -i /path/to/key -p 22 user@192.168.1.100 "sudo shutdown -h now"
-
-# Test basic connectivity
-ssh -i /path/to/key user@192.168.1.100 "echo 'Connection successful'"
-
-# Debug SSH connection
-ssh -vvv -i /path/to/key user@192.168.1.100
+# Example: Monitor plugin logs and trigger webhook
+tail -f /var/log/traefik.log | grep "Power-off command configured" | while read line; do
+  curl -X POST https://your-automation-server.com/webhook/shutdown
+done
 ```
 
-**SSH Key Issues:**
+**API Integration:**
 ```bash
-# Check key permissions
-ls -la /path/to/ssh/key
-# Should show: -rw------- (600)
-
-# Fix permissions
-chmod 600 /path/to/ssh/key
-chmod 700 ~/.ssh
-
-# Verify key format
-ssh-keygen -l -f /path/to/ssh/key
+# Example: Home Assistant automation
+# Monitor for plugin power-off logs, then call:
+curl -X POST http://home-assistant.local:8123/api/services/switch/turn_off \
+  -H "Authorization: Bearer $HA_TOKEN" \
+  -d '{"entity_id": "switch.server_power"}'
 ```
 
-**SSH Client Missing:**
-```dockerfile
-# Add to Traefik Dockerfile
-RUN apt-get update && apt-get install -y openssh-client
+#### Script Execution Issues
 
-# For password authentication
-RUN apt-get install -y sshpass
-```
-
-#### Permission Issues
-
-**Sudo Configuration:**
+**Test Your Script Independently:**
 ```bash
-# Allow user to shutdown without password prompt
-# Add to /etc/sudoers on target system
-username ALL=(ALL) NOPASSWD: /sbin/shutdown, /sbin/poweroff, /sbin/halt
+# Test SSH shutdown script
+/usr/local/bin/ssh-shutdown.sh
+ssh -i /path/to/key user@target "sudo shutdown -h now"
 
-# Test sudo permissions
-ssh user@target "sudo -n shutdown --help"
+# Test IPMI shutdown script  
+/usr/local/bin/ipmi-shutdown.sh
+ipmitool -I lanplus -H bmc-ip -U user -P pass chassis power off
+
+# Test webhook script
+/usr/local/bin/webhook-shutdown.sh
+curl -X POST https://api.example.com/shutdown
 ```
 
-**Alternative Commands:**
+**Common Script Issues:**
+```bash
+# Check script permissions
+ls -la /usr/local/bin/shutdown-script.sh
+chmod +x /usr/local/bin/shutdown-script.sh  # Make executable
+
+# Check script syntax (for bash scripts)
+bash -n /usr/local/bin/shutdown-script.sh
+
+# Check dependencies
+which ssh      # For SSH scripts
+which ipmitool # For IPMI scripts  
+which curl     # For webhook scripts
+```
+
+#### External Automation Examples
+
+**Cron-based Monitoring:**
+```bash
+# Add to crontab to check for shutdown requests every minute
+* * * * * /usr/local/bin/check-shutdown-request.sh
+```
+
+**Docker Compose Integration:**
 ```yaml
-# Try different shutdown commands
-powerOffCommand: "sudo poweroff"           # systemd systems
-powerOffCommand: "sudo halt -p"            # older systems  
-powerOffCommand: "shutdown -h now"         # if sudo not needed
-powerOffCommand: "systemctl poweroff"      # direct systemctl
+# Add monitoring container that watches logs
+version: '3'
+services:
+  shutdown-monitor:
+    image: alpine
+    volumes:
+      - /var/log:/logs:ro
+    command: |
+      sh -c 'tail -f /logs/traefik.log | grep -E "Power-off command configured" | while read line; do
+        # Extract command and execute via external method
+        echo "Shutdown requested, executing external command"
+        curl -X POST http://your-automation-api/shutdown
+      done'
 ```
 
-### IPMI Power-Off Failures
-
-**Symptoms:**
-- IPMI commands fail
-- Authentication errors to BMC
-- Network timeouts to IPMI interface
-
-**Causes & Solutions:**
-
-#### IPMI Tool Missing
-```bash
-# Install ipmitool
-apt-get install ipmitool        # Ubuntu/Debian
-yum install ipmitool           # CentOS/RHEL
-dnf install ipmitool           # Fedora
-
-# Test installation
-which ipmitool
-ipmitool -V
-```
-
-#### Test IPMI Connection
-```bash
-# Test basic connectivity
-ipmitool -I lanplus -H 192.168.1.101 -U ADMIN -P password chassis power status
-
-# Test power control
-ipmitool -I lanplus -H 192.168.1.101 -U ADMIN -P password chassis power cycle
-
-# Debug connection issues
-ipmitool -I lanplus -H 192.168.1.101 -U ADMIN -P password -v chassis power status
-```
-
-#### Common IPMI Issues
-
-**Wrong Interface Type:**
-```yaml
-# Plugin uses lanplus interface by default
-# If your BMC requires different interface, create custom command:
-powerOffMethod: "custom"
-powerOffCommand: "ipmitool -I lan -H 192.168.1.101 -U ADMIN -P password chassis power off"
-```
-
-**Network Access:**
-```bash
-# Test BMC network connectivity
-ping 192.168.1.101
-telnet 192.168.1.101 623  # IPMI port
-
-# Check from Traefik container
-docker exec traefik ping 192.168.1.101
-```
-
-**Authentication:**
-- Verify IPMI username and password
-- Check if account is enabled in BMC
-- Ensure account has power control privileges
-
-### Custom Command Failures
-
-**Symptoms:**
-- Custom commands don't execute
-- "Command not found" errors
-- Permission denied errors
-
-**Causes & Solutions:**
-
-#### Command Not Found
-```bash
-# Test command availability
-which your-command
-/path/to/your/command --help
-
-# Check from Traefik container context
-docker exec traefik which your-command
-docker exec traefik /path/to/your/command --test
-```
-
-#### Permission Issues
-```bash
-# Check command permissions
-ls -la /path/to/your/command
-
-# Make executable if needed
-chmod +x /path/to/your/command
-
-# Test execution
-/path/to/your/command --test
-```
-
-#### Script Dependencies
-```bash
-# Check script dependencies
-# For shell scripts, verify shebang line
-head -1 /path/to/script.sh  # Should show #!/bin/bash or similar
-
-# Check for required utilities
-ldd /path/to/binary        # for compiled binaries
-bash -n /path/to/script.sh # syntax check for bash scripts
-```
+**Node-RED/Home Assistant Automation:**
+- Monitor Traefik logs for power-off requests
+- Trigger shutdown via smart switches, IPMI, or SSH
+- Provide status feedback to monitoring systems
 
 ## Dashboard/Control Page Issues
 
@@ -618,16 +544,21 @@ ssh user@target "sudo ethtool eth0 | grep Wake"
 wakeonlan 00:11:22:33:44:55
 ```
 
-### Step 4: Test Power-Off Method
+### Step 4: Test Power-Off Script (External)
 ```bash
-# SSH method
+# Test your custom shutdown script directly
+/usr/local/bin/shutdown-script.sh
+
+# Example SSH shutdown script test
 ssh -i /path/to/key user@target "sudo shutdown -h now"
 
-# IPMI method  
-ipmitool -I lanplus -H target-bmc -U admin -P password chassis power status
+# Example IPMI shutdown script test  
+ipmitool -I lanplus -H target-bmc -U admin -P password chassis power off
 
-# Custom method
-/path/to/custom/command --test
+# Example webhook script test
+curl -X POST https://your-automation-api.com/shutdown
+
+# Note: Plugin only logs the command - external execution required
 ```
 
 ### Step 5: Test Through Traefik

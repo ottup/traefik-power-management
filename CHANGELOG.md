@@ -4,6 +4,29 @@ All notable changes to the Traefik Power Management Plugin are documented in thi
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.0] - Yaegi Compatibility & Custom Script Focus 🔧
+
+**BREAKING CHANGES**: Power-off functionality now requires custom external scripts due to Yaegi interpreter limitations.
+
+### Changed
+- **Removed os/exec dependency** for Yaegi interpreter compatibility
+- **Simplified power-off configuration** to custom scripts only
+- **Updated documentation** with external script execution examples
+- **Enhanced logging** for power-off command configuration
+
+### Removed
+- **Direct SSH execution** (now requires custom SSH scripts)
+- **Direct IPMI execution** (now requires custom IPMI scripts)
+- **SSH configuration fields** (sshHost, sshUser, sshKeyPath, etc.)
+- **IPMI configuration fields** (ipmiHost, ipmiUser, ipmiPassword, etc.)
+
+### Fixed
+- **Plugin loading issues** in Traefik due to os/exec import restrictions
+- **Yaegi interpreter compatibility** for reliable middleware initialization
+
+### Migration Guide
+Power-off functionality now requires users to implement custom scripts for SSH, IPMI, or other shutdown methods. The plugin logs the configured command but does not execute it directly. Users must implement external execution via webhooks, cron jobs, or automation systems.
+
 ## [v3.0.0] - Complete Power Management Overhaul 🚀
 
 **BREAKING CHANGES**: This is a complete rewrite focused on comprehensive power management. No backward compatibility with previous versions.

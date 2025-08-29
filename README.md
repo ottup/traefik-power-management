@@ -1,6 +1,6 @@
 # Traefik Power Management Plugin
 
-A comprehensive power management middleware plugin for Traefik that provides complete lifecycle control over your services - from automatic wake-up via Wake-on-LAN to secure remote shutdown via SSH, IPMI, or custom commands.
+A comprehensive power management middleware plugin for Traefik that provides complete lifecycle control over your services - from automatic wake-up via Wake-on-LAN to secure remote shutdown via custom scripts (SSH, IPMI, webhooks, or any method you choose).
 
 ## Table of Contents
 

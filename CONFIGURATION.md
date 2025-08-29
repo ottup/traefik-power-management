@@ -61,28 +61,20 @@ middlewares:
         hideRedirectButton: false                         # Hide "Go to Service Anyway" button (default: false)
         
         # === POWER-OFF SETTINGS ===
-        powerOffMethod: "ssh"                             # Power-off method: ssh|ipmi|custom (default: ssh)
-        powerOffCommand: "sudo shutdown -h now"          # Command to execute (default: "sudo shutdown -h now")
+        powerOffCommand: "/usr/local/bin/shutdown-script.sh"  # Custom script path (default: "/usr/local/bin/shutdown-script.sh")
         
-        # === SSH CONFIGURATION (for powerOffMethod: "ssh") ===
-        sshHost: "192.168.1.100"                          # SSH target host
-        sshUser: "admin"                                  # SSH username
-        sshKeyPath: "/path/to/ssh/key"                    # SSH private key path (preferred)
-        sshPassword: "password"                           # SSH password (use key instead if possible)
-        sshPort: "22"                                     # SSH port (default: 22)
-        
-        # === IPMI CONFIGURATION (for powerOffMethod: "ipmi") ===
-        ipmiHost: "192.168.1.100"                         # IPMI/BMC host address
-        ipmiUser: "ADMIN"                                 # IPMI username
-        ipmiPassword: "password"                          # IPMI password
+        # Note: Power-off functionality requires custom scripts due to Yaegi interpreter limitations.
+        # Users must implement SSH, IPMI, or other shutdown methods via external scripts.
         
         # === DEBUG SETTINGS ===
         debug: true                                       # Enable detailed logging (default: false)
 ```
 
-## Power-Off Method Examples
+## Custom Script Power-Off Examples
 
-### SSH-Based Shutdown (Recommended)
+Due to Yaegi interpreter limitations, all power-off functionality requires custom external scripts.
+
+### SSH-Based Shutdown Script
 ```yaml
 middlewares:
   ssh-power-control:
@@ -92,16 +84,17 @@ middlewares:
         macAddress: "00:11:22:33:44:55"
         enableControlPage: true
         
-        # SSH power-off configuration
-        powerOffMethod: "ssh"
-        powerOffCommand: "sudo shutdown -h now"
-        sshHost: "192.168.1.100"
-        sshUser: "admin"
-        sshKeyPath: "/home/traefik/.ssh/id_rsa"
-        sshPort: "22"
+        # Custom SSH shutdown script
+        powerOffCommand: "/usr/local/bin/ssh-shutdown.sh"
 ```
 
-### IPMI-Based Power Control (Enterprise)
+**Example SSH shutdown script** (`/usr/local/bin/ssh-shutdown.sh`):
+```bash
+#!/bin/bash
+ssh -i /path/to/key -o StrictHostKeyChecking=no admin@192.168.1.100 "sudo shutdown -h now"
+```
+
+### IPMI-Based Power Control Script
 ```yaml
 middlewares:
   ipmi-power-control:
@@ -111,26 +104,34 @@ middlewares:
         macAddress: "00:11:22:33:44:55"
         enableControlPage: true
         
-        # IPMI power-off configuration
-        powerOffMethod: "ipmi"
-        ipmiHost: "192.168.1.101"  # BMC/iDRAC address
-        ipmiUser: "ADMIN"
-        ipmiPassword: "admin123"
+        # Custom IPMI shutdown script
+        powerOffCommand: "/usr/local/bin/ipmi-shutdown.sh"
 ```
 
-### Custom Command Power Control
+**Example IPMI shutdown script** (`/usr/local/bin/ipmi-shutdown.sh`):
+```bash
+#!/bin/bash
+ipmitool -I lanplus -H 192.168.1.101 -U ADMIN -P admin123 chassis power off
+```
+
+### Webhook-Based Power Control
 ```yaml
 middlewares:
-  custom-power-control:
+  webhook-power-control:
     plugin:
       traefik-wol:
         healthCheck: "http://192.168.1.100:3000/health"
         macAddress: "00:11:22:33:44:55"
         enableControlPage: true
         
-        # Custom command power-off
-        powerOffMethod: "custom"
-        powerOffCommand: "/usr/local/bin/my-shutdown-script.sh --server=192.168.1.100"
+        # Webhook-based shutdown
+        powerOffCommand: "/usr/local/bin/webhook-shutdown.sh"
+```
+
+**Example webhook script** (`/usr/local/bin/webhook-shutdown.sh`):
+```bash
+#!/bin/bash
+curl -X POST https://api.example.com/shutdown -H "Authorization: Bearer $API_TOKEN" -d '{"device":"192.168.1.100"}'
 ```
 
 ## Alternative Configuration Formats
@@ -150,14 +151,7 @@ middlewares:
   # Power-off settings
   showPowerOffButton = true
   confirmPowerOff = true
-  powerOffMethod = "ssh"
-  powerOffCommand = "sudo shutdown -h now"
-  
-  # SSH configuration
-  sshHost = "192.168.1.100"
-  sshUser = "admin"
-  sshKeyPath = "/path/to/ssh/key"
-  sshPort = "22"
+  powerOffCommand = "/usr/local/bin/shutdown-script.sh"
   
   # Auto-redirect settings
   autoRedirect = false
@@ -190,12 +184,7 @@ middlewares:
             "serviceDescription": "Home Media Server",
             "showPowerOffButton": true,
             "confirmPowerOff": true,
-            "powerOffMethod": "ssh",
-            "powerOffCommand": "sudo shutdown -h now",
-            "sshHost": "192.168.1.100",
-            "sshUser": "admin",
-            "sshKeyPath": "/path/to/ssh/key",
-            "sshPort": "22",
+            "powerOffCommand": "/usr/local/bin/shutdown-script.sh",
             "autoRedirect": false,
             "redirectDelay": "5",
             "ipAddress": "192.168.1.100",
@@ -336,12 +325,8 @@ middlewares:
         confirmPowerOff: true        # Require confirmation for shutdown
         hideRedirectButton: false    # Show "Go to Service Anyway" button
         
-        # Power-off configuration (SSH example)
-        powerOffMethod: "ssh"
-        powerOffCommand: "sudo shutdown -h now"
-        sshHost: "192.168.1.100"
-        sshUser: "admin"
-        sshKeyPath: "/home/traefik/.ssh/id_rsa"
+        # Power-off configuration (custom script)
+        powerOffCommand: "/usr/local/bin/ssh-shutdown.sh"
 ```
 
 ### API Endpoints
@@ -387,14 +372,10 @@ http:
           controlPageTitle: "Media Server Control"
           serviceDescription: "Home Media Server"
           
-          # Configure power-off via SSH
+          # Configure power-off via custom script
           showPowerOffButton: true
           confirmPowerOff: true
-          powerOffMethod: "ssh"
-          powerOffCommand: "sudo shutdown -h now"
-          sshHost: "192.168.1.100"
-          sshUser: "admin"
-          sshKeyPath: "/home/traefik/.ssh/media_server_key"
+          powerOffCommand: "/usr/local/bin/media-server-shutdown.sh"
           
           # Optional: disable auto-redirect for manual control
           autoRedirect: false
@@ -403,7 +384,7 @@ http:
 
 ### Advanced Power Management Scenarios
 
-#### Enterprise Server with IPMI
+#### Enterprise Server with IPMI Script
 ```yaml
 middlewares:
   enterprise-power:
@@ -416,15 +397,18 @@ middlewares:
         controlPageTitle: "Enterprise Server Control"
         serviceDescription: "Production Database Server"
         
-        # IPMI-based power control
-        powerOffMethod: "ipmi"
-        ipmiHost: "192.168.1.51"  # BMC/iDRAC address
-        ipmiUser: "ADMIN"
-        ipmiPassword: "${IPMI_PASSWORD}"  # Use environment variable
+        # IPMI-based power control via custom script
+        powerOffCommand: "/usr/local/bin/enterprise-ipmi-shutdown.sh"
         
         # Security settings
         confirmPowerOff: true
         hideRedirectButton: true  # Hide direct access for security
+```
+
+**Example IPMI script** (`/usr/local/bin/enterprise-ipmi-shutdown.sh`):
+```bash
+#!/bin/bash
+ipmitool -I lanplus -H 192.168.1.51 -U ADMIN -P "${IPMI_PASSWORD}" chassis power off
 ```
 
 #### Home Lab with Custom Scripts
@@ -441,7 +425,6 @@ middlewares:
         serviceDescription: "Development Environment"
         
         # Custom power management script
-        powerOffMethod: "custom"
         powerOffCommand: "/home/user/scripts/graceful-shutdown.sh --target=homelab"
         
         # User-friendly settings
