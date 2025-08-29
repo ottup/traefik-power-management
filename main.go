@@ -104,6 +104,12 @@ type wakeStatus struct {
 	progress      int // 0-100
 }
 
+// bypassStatus tracks bypass state for "Go to Service" functionality
+type bypassStatus struct {
+	isBypass  bool
+	startTime time.Time
+}
+
 // WOLPlugin is the main plugin struct.
 type WOLPlugin struct {
 	next                http.Handler
@@ -140,6 +146,8 @@ type WOLPlugin struct {
 	healthMutex         sync.RWMutex
 	wakeCache           *wakeStatus
 	wakeMutex           sync.RWMutex
+	bypassCache         *bypassStatus
+	bypassMutex         sync.RWMutex
 }
 
 // New creates a new WOL plugin.
@@ -233,6 +241,8 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		healthMutex:         sync.RWMutex{},
 		wakeCache:           &wakeStatus{},
 		wakeMutex:           sync.RWMutex{},
+		bypassCache:         &bypassStatus{},
+		bypassMutex:         sync.RWMutex{},
 	}, nil
 }
 
@@ -626,16 +636,13 @@ const controlPageTemplate = `<!DOCTYPE html>
         }
         
         function goToService() {
-            // Set a session cookie to bypass control page and reload
-            document.cookie = 'bypassControlPage=true; path=/; SameSite=Strict';
-            window.location.reload();
-        }
-        
-        // Check for bypass cookie on page load
-        if (document.cookie.includes('bypassControlPage=true')) {
-            // The server should have already handled the bypass, but if we're still here,
-            // it means something went wrong. Clear the cookie.
-            document.cookie = 'bypassControlPage=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+            // Create and submit POST form to redirect endpoint
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = '/_wol/redirect';
+            form.style.display = 'none';
+            document.body.appendChild(form);
+            form.submit();
         }
         
         // Initial status check
@@ -661,28 +668,26 @@ func (w *WOLPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		case "/_wol/status":
 			w.handleStatusEndpoint(rw, req)
 			return
+		case "/_wol/redirect":
+			w.handleRedirectEndpoint(rw, req)
+			return
 		}
 	}
 
 
+	// Check for bypass state first (handles "Go to Service" functionality)
+	if w.isBypassActive() {
+		if w.debug {
+			fmt.Printf("WOL Plugin [%s]: Bypass state active, forwarding to service\n", w.name)
+		}
+		// Clear bypass state after use
+		w.clearBypassState()
+		w.next.ServeHTTP(rw, req)
+		return
+	}
+
 	// Check if control page is enabled
 	if w.enableControlPage {
-		// Check for bypass cookie first
-		if cookie, err := req.Cookie("bypassControlPage"); err == nil && cookie.Value == "true" {
-			if w.debug {
-				fmt.Printf("WOL Plugin [%s]: Bypass cookie detected, forwarding to service\n", w.name)
-			}
-			// Clear the bypass cookie by setting it to expire
-			http.SetCookie(rw, &http.Cookie{
-				Name:     "bypassControlPage",
-				Value:    "",
-				Path:     "/",
-				Expires:  time.Unix(0, 0),
-				HttpOnly: false, // Allow JS to access for cleanup
-			})
-			w.next.ServeHTTP(rw, req)
-			return
-		}
 		
 		isHealthy := w.getCachedHealthStatus()
 		
@@ -743,6 +748,32 @@ func (w *WOLPlugin) getCachedHealthStatus() bool {
 	w.healthCache.lastCheck = now
 	
 	return newHealth
+}
+
+// isBypassActive checks if bypass state is active and not expired
+func (w *WOLPlugin) isBypassActive() bool {
+	w.bypassMutex.RLock()
+	defer w.bypassMutex.RUnlock()
+	
+	if !w.bypassCache.isBypass {
+		return false
+	}
+	
+	// Check if bypass has expired (5 second timeout)
+	if time.Since(w.bypassCache.startTime) > 5*time.Second {
+		return false
+	}
+	
+	return true
+}
+
+// clearBypassState clears the bypass state
+func (w *WOLPlugin) clearBypassState() {
+	w.bypassMutex.Lock()
+	defer w.bypassMutex.Unlock()
+	
+	w.bypassCache.isBypass = false
+	w.bypassCache.startTime = time.Time{}
 }
 
 func (w *WOLPlugin) performHealthCheck() bool {
@@ -1254,6 +1285,32 @@ func (w *WOLPlugin) waitForServiceWithProgress() bool {
 		time.Sleep(checkInterval)
 	}
 	return false
+}
+
+// handleRedirectEndpoint handles POST requests to /_wol/redirect
+func (w *WOLPlugin) handleRedirectEndpoint(rw http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Set bypass state with 5-second expiration
+	w.bypassMutex.Lock()
+	w.bypassCache.isBypass = true
+	w.bypassCache.startTime = time.Now()
+	w.bypassMutex.Unlock()
+
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: Redirect request received, bypass state set\n", w.name)
+	}
+
+	// Redirect to current path without any parameters
+	redirectURL := req.URL.Path
+	if redirectURL == "/_wol/redirect" {
+		redirectURL = "/"
+	}
+	
+	http.Redirect(rw, req, redirectURL, http.StatusFound)
 }
 
 // handlePowerOffEndpoint handles POST requests to /_wol/poweroff
