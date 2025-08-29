@@ -17,7 +17,7 @@ import (
 
 const (
 	// PluginVersion represents the current version of the plugin
-	PluginVersion = "3.1.0"
+	PluginVersion = "3.2.0"
 	
 	// DefaultPort is the default WOL UDP port
 	DefaultPort = 9
@@ -47,8 +47,9 @@ type Config struct {
 	ServiceDescription  string `json:"serviceDescription,omitempty" yaml:"serviceDescription,omitempty"`
 	
 	// Auto-redirect configuration
-	AutoRedirect        bool   `json:"autoRedirect,omitempty" yaml:"autoRedirect,omitempty"`
-	RedirectDelay       string `json:"redirectDelay,omitempty" yaml:"redirectDelay,omitempty"`
+	AutoRedirect            bool   `json:"autoRedirect,omitempty" yaml:"autoRedirect,omitempty"`
+	RedirectDelay           string `json:"redirectDelay,omitempty" yaml:"redirectDelay,omitempty"`
+	SkipControlPageWhenHealthy bool   `json:"skipControlPageWhenHealthy,omitempty" yaml:"skipControlPageWhenHealthy,omitempty"`
 	
 	// Dashboard configuration
 	ShowPowerOffButton  bool   `json:"showPowerOffButton,omitempty" yaml:"showPowerOffButton,omitempty"`
@@ -73,8 +74,9 @@ func CreateConfig() *Config {
 		ServiceDescription:  "Service",
 		
 		// Auto-redirect defaults
-		AutoRedirect:        false,
-		RedirectDelay:       "3",
+		AutoRedirect:            false,
+		RedirectDelay:           "3",
+		SkipControlPageWhenHealthy: false,
 		
 		// Dashboard defaults
 		ShowPowerOffButton:  true,
@@ -100,7 +102,6 @@ type wakeStatus struct {
 	startTime     time.Time
 	message       string
 	progress      int // 0-100
-	originalURL   string
 }
 
 // WOLPlugin is the main plugin struct.
@@ -123,8 +124,9 @@ type WOLPlugin struct {
 	serviceDescription  string
 	
 	// Auto-redirect configuration
-	autoRedirect        bool
-	redirectDelay       time.Duration
+	autoRedirect            bool
+	redirectDelay           time.Duration
+	skipControlPageWhenHealthy bool
 	
 	// Dashboard configuration
 	showPowerOffButton  bool
@@ -215,8 +217,9 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 		serviceDescription:  serviceDescription,
 		
 		// Auto-redirect configuration
-		autoRedirect:        config.AutoRedirect,
-		redirectDelay:       time.Duration(redirectDelay) * time.Second,
+		autoRedirect:            config.AutoRedirect,
+		redirectDelay:           time.Duration(redirectDelay) * time.Second,
+		skipControlPageWhenHealthy: config.SkipControlPageWhenHealthy,
 		
 		// Dashboard configuration
 		showPowerOffButton:  config.ShowPowerOffButton,
@@ -446,9 +449,9 @@ const controlPageTemplate = `<!DOCTYPE html>
             </button>
             {{end}}
             {{if not .HideRedirectButton}}
-            <a id="redirectBtn" href="{{.OriginalURL}}" class="btn btn-secondary">
-                ↗️ Go to Service Anyway
-            </a>
+            <button id="redirectBtn" class="btn btn-secondary" onclick="goToService()">
+                ↗️ Go to Service
+            </button>
             {{end}}
         </div>
     </div>
@@ -488,7 +491,7 @@ const controlPageTemplate = `<!DOCTYPE html>
                 if (autoRedirect) {
                     statusText.textContent = 'Service is online! Redirecting in ' + redirectDelay + ' seconds...';
                     setTimeout(() => {
-                        window.location.href = '{{.OriginalURL}}';
+                        goToService();
                     }, redirectDelay * 1000);
                 }
             } else if (status.isWaking) {
@@ -622,6 +625,11 @@ const controlPageTemplate = `<!DOCTYPE html>
             }, 2000);
         }
         
+        function goToService() {
+            // Use the proxy endpoint to go to the service
+            window.location.href = '/_wol/proxy/';
+        }
+        
         // Initial status check
         fetch('/_wol/status')
         .then(response => response.json())
@@ -645,58 +653,32 @@ func (w *WOLPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		case "/_wol/status":
 			w.handleStatusEndpoint(rw, req)
 			return
-		case "/_wol/redirect":
-			w.handleRedirectEndpoint(rw, req)
+		case "/_wol/proxy":
+			w.handleProxyEndpoint(rw, req)
 			return
 		}
 	}
 
-	isHealthy := w.getCachedHealthStatus()
-
-	if !isHealthy {
-		if w.enableControlPage {
-			// Show control page instead of auto-wake
+	// Check if control page is enabled
+	if w.enableControlPage {
+		isHealthy := w.getCachedHealthStatus()
+		
+		// Show control page unless configured to skip when healthy
+		if !isHealthy || !w.skipControlPageWhenHealthy {
 			w.serveControlPage(rw, req)
 			return
-		} else {
-			// Original behavior: auto-wake
-			fmt.Printf("WOL Plugin [%s]: Service unhealthy, attempting to wake %s\n", w.name, w.macAddress)
-			
-			success := false
-			for attempt := 1; attempt <= w.retryAttempts; attempt++ {
-				if w.debug {
-					fmt.Printf("WOL Plugin [%s]: Wake attempt %d/%d\n", w.name, attempt, w.retryAttempts)
-				}
-
-				if err := w.sendWOLPacket(); err != nil {
-					fmt.Printf("WOL Plugin [%s]: Failed to send WOL packet (attempt %d): %v\n", w.name, attempt, err)
-					if attempt < w.retryAttempts {
-						time.Sleep(w.retryInterval)
-						continue
-					}
-					http.Error(rw, "Failed to wake up service after all attempts", http.StatusServiceUnavailable)
-					return
-				}
-
-				if w.waitForService() {
-					success = true
-					break
-				}
-
-				if attempt < w.retryAttempts {
-					fmt.Printf("WOL Plugin [%s]: Service not responding, retrying in %v\n", w.name, w.retryInterval)
-					time.Sleep(w.retryInterval)
-				}
-			}
-
-			if !success {
-				fmt.Printf("WOL Plugin [%s]: Service did not come online after %d attempts\n", w.name, w.retryAttempts)
-				http.Error(rw, "Service did not respond after wake up attempts", http.StatusServiceUnavailable)
-				return
-			}
-
-			fmt.Printf("WOL Plugin [%s]: Service is now online\n", w.name)
 		}
+		
+		// Service is healthy and we're configured to skip control page
+		w.next.ServeHTTP(rw, req)
+		return
+	}
+
+	// Control page disabled - use original auto-wake behavior
+	isHealthy := w.getCachedHealthStatus()
+	if !isHealthy {
+		w.performAutoWake(rw, req)
+		return
 	}
 
 	w.next.ServeHTTP(rw, req)
@@ -791,10 +773,6 @@ func (w *WOLPlugin) performHealthCheck() bool {
 	return healthy
 }
 
-// isHealthy performs a direct health check without caching (used by waitForService)
-func (w *WOLPlugin) isHealthy() bool {
-	return w.performHealthCheck()
-}
 
 // getNetworkInterfaces returns available network interfaces for WOL packet sending
 func (w *WOLPlugin) getNetworkInterfaces() ([]net.Interface, error) {
@@ -1018,34 +996,10 @@ func (w *WOLPlugin) serveControlPage(rw http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	// Store the original URL for redirection
-	originalURL := req.URL.String()
-	if req.Header.Get("X-Forwarded-Proto") != "" {
-		scheme := req.Header.Get("X-Forwarded-Proto")
-		host := req.Header.Get("X-Forwarded-Host")
-		if host == "" {
-			host = req.Header.Get("Host")
-		}
-		originalURL = scheme + "://" + host + req.URL.Path
-		if req.URL.RawQuery != "" {
-			originalURL += "?" + req.URL.RawQuery
-		}
-	} else {
-		scheme := "http"
-		if req.TLS != nil {
-			scheme = "https"
-		}
-		originalURL = scheme + "://" + req.Host + req.URL.String()
-	}
-
-	w.wakeMutex.Lock()
-	w.wakeCache.originalURL = originalURL
-	w.wakeMutex.Unlock()
 
 	data := struct {
 		Title                string
 		ServiceDescription   string
-		OriginalURL          string
 		TimeoutSeconds       int
 		AutoRedirect         bool
 		RedirectDelaySeconds int
@@ -1055,7 +1009,6 @@ func (w *WOLPlugin) serveControlPage(rw http.ResponseWriter, req *http.Request) 
 	}{
 		Title:                w.controlPageTitle,
 		ServiceDescription:   w.serviceDescription,
-		OriginalURL:          originalURL,
 		TimeoutSeconds:       int(w.timeout.Seconds()),
 		AutoRedirect:         w.autoRedirect,
 		RedirectDelaySeconds: int(w.redirectDelay.Seconds()),
@@ -1132,23 +1085,58 @@ func (w *WOLPlugin) handleStatusEndpoint(rw http.ResponseWriter, req *http.Reque
 	w.writeJSONResponse(rw, response)
 }
 
-// handleRedirectEndpoint handles GET requests to /_wol/redirect
-func (w *WOLPlugin) handleRedirectEndpoint(rw http.ResponseWriter, req *http.Request) {
-	if req.Method != http.MethodGet {
-		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+// handleProxyEndpoint handles requests to /_wol/proxy - forwards to actual service
+func (w *WOLPlugin) handleProxyEndpoint(rw http.ResponseWriter, req *http.Request) {
+	// Create a new request without the /_wol/proxy prefix
+	newReq := req.Clone(req.Context())
+	newReq.URL.Path = strings.TrimPrefix(req.URL.Path, "/_wol/proxy")
+	if newReq.URL.Path == "" {
+		newReq.URL.Path = "/"
+	}
+	
+	// Forward to the actual service
+	w.next.ServeHTTP(rw, newReq)
+}
+
+// performAutoWake handles the legacy auto-wake behavior when control page is disabled
+func (w *WOLPlugin) performAutoWake(rw http.ResponseWriter, req *http.Request) {
+	fmt.Printf("WOL Plugin [%s]: Service unhealthy, attempting to wake %s\n", w.name, w.macAddress)
+	
+	success := false
+	for attempt := 1; attempt <= w.retryAttempts; attempt++ {
+		if w.debug {
+			fmt.Printf("WOL Plugin [%s]: Wake attempt %d/%d\n", w.name, attempt, w.retryAttempts)
+		}
+
+		if err := w.sendWOLPacket(); err != nil {
+			fmt.Printf("WOL Plugin [%s]: Failed to send WOL packet (attempt %d): %v\n", w.name, attempt, err)
+			if attempt < w.retryAttempts {
+				time.Sleep(w.retryInterval)
+				continue
+			}
+			http.Error(rw, "Failed to wake up service after all attempts", http.StatusServiceUnavailable)
+			return
+		}
+
+		if w.waitForService() {
+			success = true
+			break
+		}
+
+		if attempt < w.retryAttempts {
+			fmt.Printf("WOL Plugin [%s]: Service not responding, retrying in %v\n", w.name, w.retryInterval)
+			time.Sleep(w.retryInterval)
+		}
+	}
+
+	if !success {
+		fmt.Printf("WOL Plugin [%s]: Service did not come online after %d attempts\n", w.name, w.retryAttempts)
+		http.Error(rw, "Service did not respond after wake up attempts", http.StatusServiceUnavailable)
 		return
 	}
 
-	w.wakeMutex.RLock()
-	originalURL := w.wakeCache.originalURL
-	w.wakeMutex.RUnlock()
-
-	if originalURL == "" {
-		http.Error(rw, "No original URL stored", http.StatusBadRequest)
-		return
-	}
-
-	http.Redirect(rw, req, originalURL, http.StatusFound)
+	fmt.Printf("WOL Plugin [%s]: Service is now online\n", w.name)
+	w.next.ServeHTTP(rw, req)
 }
 
 // writeJSONResponse writes a JSON response
