@@ -17,7 +17,7 @@ import (
 
 const (
 	// PluginVersion represents the current version of the plugin
-	PluginVersion = "3.2.2"
+	PluginVersion = "3.2.3"
 	
 	// DefaultPort is the default WOL UDP port
 	DefaultPort = 9
@@ -491,7 +491,7 @@ const controlPageTemplate = `<!DOCTYPE html>
                 if (autoRedirect) {
                     statusText.textContent = 'Service is online! Redirecting in ' + redirectDelay + ' seconds...';
                     setTimeout(() => {
-                        window.location.href = '{{.ServiceURL}}';
+                        goToService();
                     }, redirectDelay * 1000);
                 }
             } else if (status.isWaking) {
@@ -626,8 +626,10 @@ const controlPageTemplate = `<!DOCTYPE html>
         }
         
         function goToService() {
-            // Direct redirect to the service URL
-            window.location.href = '{{.ServiceURL}}';
+            // Add bypass parameter to current URL to skip control page
+            const currentUrl = new URL(window.location);
+            currentUrl.searchParams.set('bypass', '1');
+            window.location.href = currentUrl.toString();
         }
         
         // Initial status check
@@ -654,6 +656,15 @@ func (w *WOLPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			w.handleStatusEndpoint(rw, req)
 			return
 		}
+	}
+
+	// Check for bypass parameter first
+	if req.URL.Query().Get("bypass") == "1" {
+		if w.debug {
+			fmt.Printf("WOL Plugin [%s]: Bypass parameter detected, forwarding to service\n", w.name)
+		}
+		w.next.ServeHTTP(rw, req)
+		return
 	}
 
 	// Check if control page is enabled
@@ -993,14 +1004,9 @@ func (w *WOLPlugin) serveControlPage(rw http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-
-	// Build service URL from health check URL
-	serviceURL := w.buildServiceURL()
-
 	data := struct {
 		Title                string
 		ServiceDescription   string
-		ServiceURL           string
 		TimeoutSeconds       int
 		AutoRedirect         bool
 		RedirectDelaySeconds int
@@ -1010,7 +1016,6 @@ func (w *WOLPlugin) serveControlPage(rw http.ResponseWriter, req *http.Request) 
 	}{
 		Title:                w.controlPageTitle,
 		ServiceDescription:   w.serviceDescription,
-		ServiceURL:           serviceURL,
 		TimeoutSeconds:       int(w.timeout.Seconds()),
 		AutoRedirect:         w.autoRedirect,
 		RedirectDelaySeconds: int(w.redirectDelay.Seconds()),
@@ -1087,34 +1092,6 @@ func (w *WOLPlugin) handleStatusEndpoint(rw http.ResponseWriter, req *http.Reque
 	w.writeJSONResponse(rw, response)
 }
 
-// buildServiceURL constructs the service URL from the health check URL
-func (w *WOLPlugin) buildServiceURL() string {
-	healthURL := w.healthCheck
-	
-	// Parse the health check URL
-	if u, err := url.Parse(healthURL); err == nil {
-		// Remove common health check paths
-		path := u.Path
-		if strings.HasSuffix(path, "/health") {
-			path = strings.TrimSuffix(path, "/health")
-		}
-		if path == "" {
-			path = "/"
-		}
-		
-		// Reconstruct the URL with cleaned path
-		u.Path = path
-		u.RawQuery = ""  // Remove any query parameters from health check
-		return u.String()
-	}
-	
-	// Fallback: just remove /health suffix from the original URL
-	if strings.HasSuffix(healthURL, "/health") {
-		return strings.TrimSuffix(healthURL, "/health") + "/"
-	}
-	
-	return healthURL
-}
 
 
 // performAutoWake handles the legacy auto-wake behavior when control page is disabled
