@@ -17,7 +17,7 @@ import (
 
 const (
 	// PluginVersion represents the current version of the plugin
-	PluginVersion = "3.2.1"
+	PluginVersion = "3.2.2"
 	
 	// DefaultPort is the default WOL UDP port
 	DefaultPort = 9
@@ -491,7 +491,7 @@ const controlPageTemplate = `<!DOCTYPE html>
                 if (autoRedirect) {
                     statusText.textContent = 'Service is online! Redirecting in ' + redirectDelay + ' seconds...';
                     setTimeout(() => {
-                        goToService();
+                        window.location.href = '{{.ServiceURL}}';
                     }, redirectDelay * 1000);
                 }
             } else if (status.isWaking) {
@@ -626,8 +626,8 @@ const controlPageTemplate = `<!DOCTYPE html>
         }
         
         function goToService() {
-            // Use the proxy endpoint to go to the service
-            window.location.href = '/_wol/proxy/';
+            // Direct redirect to the service URL
+            window.location.href = '{{.ServiceURL}}';
         }
         
         // Initial status check
@@ -652,9 +652,6 @@ func (w *WOLPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 			return
 		case "/_wol/status":
 			w.handleStatusEndpoint(rw, req)
-			return
-		case "/_wol/proxy":
-			w.handleProxyEndpoint(rw, req)
 			return
 		}
 	}
@@ -997,9 +994,13 @@ func (w *WOLPlugin) serveControlPage(rw http.ResponseWriter, req *http.Request) 
 	}
 
 
+	// Build service URL from health check URL
+	serviceURL := w.buildServiceURL()
+
 	data := struct {
 		Title                string
 		ServiceDescription   string
+		ServiceURL           string
 		TimeoutSeconds       int
 		AutoRedirect         bool
 		RedirectDelaySeconds int
@@ -1009,6 +1010,7 @@ func (w *WOLPlugin) serveControlPage(rw http.ResponseWriter, req *http.Request) 
 	}{
 		Title:                w.controlPageTitle,
 		ServiceDescription:   w.serviceDescription,
+		ServiceURL:           serviceURL,
 		TimeoutSeconds:       int(w.timeout.Seconds()),
 		AutoRedirect:         w.autoRedirect,
 		RedirectDelaySeconds: int(w.redirectDelay.Seconds()),
@@ -1085,32 +1087,35 @@ func (w *WOLPlugin) handleStatusEndpoint(rw http.ResponseWriter, req *http.Reque
 	w.writeJSONResponse(rw, response)
 }
 
-// handleProxyEndpoint handles requests to /_wol/proxy - forwards to actual service
-func (w *WOLPlugin) handleProxyEndpoint(rw http.ResponseWriter, req *http.Request) {
-	if w.debug {
-		fmt.Printf("WOL Plugin [%s]: Proxy request received: %s %s\n", w.name, req.Method, req.URL.Path)
+// buildServiceURL constructs the service URL from the health check URL
+func (w *WOLPlugin) buildServiceURL() string {
+	healthURL := w.healthCheck
+	
+	// Parse the health check URL
+	if u, err := url.Parse(healthURL); err == nil {
+		// Remove common health check paths
+		path := u.Path
+		if strings.HasSuffix(path, "/health") {
+			path = strings.TrimSuffix(path, "/health")
+		}
+		if path == "" {
+			path = "/"
+		}
+		
+		// Reconstruct the URL with cleaned path
+		u.Path = path
+		u.RawQuery = ""  // Remove any query parameters from health check
+		return u.String()
 	}
 	
-	// Strip /_wol/proxy prefix and modify the request path directly
-	originalPath := req.URL.Path
-	newPath := strings.TrimPrefix(req.URL.Path, "/_wol/proxy")
-	if newPath == "" {
-		newPath = "/"
+	// Fallback: just remove /health suffix from the original URL
+	if strings.HasSuffix(healthURL, "/health") {
+		return strings.TrimSuffix(healthURL, "/health") + "/"
 	}
 	
-	// Temporarily modify the request path
-	req.URL.Path = newPath
-	
-	if w.debug {
-		fmt.Printf("WOL Plugin [%s]: Proxying %s -> %s\n", w.name, originalPath, newPath)
-	}
-	
-	// Forward to the actual service
-	w.next.ServeHTTP(rw, req)
-	
-	// Restore original path (good practice)
-	req.URL.Path = originalPath
+	return healthURL
 }
+
 
 // performAutoWake handles the legacy auto-wake behavior when control page is disabled
 func (w *WOLPlugin) performAutoWake(rw http.ResponseWriter, req *http.Request) {
