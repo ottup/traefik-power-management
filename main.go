@@ -17,7 +17,7 @@ import (
 
 const (
 	// PluginVersion represents the current version of the plugin
-	PluginVersion = "3.2.3"
+	PluginVersion = "3.2.4"
 	
 	// DefaultPort is the default WOL UDP port
 	DefaultPort = 9
@@ -626,10 +626,16 @@ const controlPageTemplate = `<!DOCTYPE html>
         }
         
         function goToService() {
-            // Add bypass parameter to current URL to skip control page
-            const currentUrl = new URL(window.location);
-            currentUrl.searchParams.set('bypass', '1');
-            window.location.href = currentUrl.toString();
+            // Set a session cookie to bypass control page and reload
+            document.cookie = 'bypassControlPage=true; path=/; SameSite=Strict';
+            window.location.reload();
+        }
+        
+        // Check for bypass cookie on page load
+        if (document.cookie.includes('bypassControlPage=true')) {
+            // The server should have already handled the bypass, but if we're still here,
+            // it means something went wrong. Clear the cookie.
+            document.cookie = 'bypassControlPage=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
         }
         
         // Initial status check
@@ -658,17 +664,26 @@ func (w *WOLPlugin) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// Check for bypass parameter first
-	if req.URL.Query().Get("bypass") == "1" {
-		if w.debug {
-			fmt.Printf("WOL Plugin [%s]: Bypass parameter detected, forwarding to service\n", w.name)
-		}
-		w.next.ServeHTTP(rw, req)
-		return
-	}
 
 	// Check if control page is enabled
 	if w.enableControlPage {
+		// Check for bypass cookie first
+		if cookie, err := req.Cookie("bypassControlPage"); err == nil && cookie.Value == "true" {
+			if w.debug {
+				fmt.Printf("WOL Plugin [%s]: Bypass cookie detected, forwarding to service\n", w.name)
+			}
+			// Clear the bypass cookie by setting it to expire
+			http.SetCookie(rw, &http.Cookie{
+				Name:     "bypassControlPage",
+				Value:    "",
+				Path:     "/",
+				Expires:  time.Unix(0, 0),
+				HttpOnly: false, // Allow JS to access for cleanup
+			})
+			w.next.ServeHTTP(rw, req)
+			return
+		}
+		
 		isHealthy := w.getCachedHealthStatus()
 		
 		// Show control page unless configured to skip when healthy
