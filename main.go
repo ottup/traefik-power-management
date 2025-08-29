@@ -17,7 +17,7 @@ import (
 
 const (
 	// PluginVersion represents the current version of the plugin
-	PluginVersion = "3.2.0"
+	PluginVersion = "3.2.1"
 	
 	// DefaultPort is the default WOL UDP port
 	DefaultPort = 9
@@ -1087,15 +1087,29 @@ func (w *WOLPlugin) handleStatusEndpoint(rw http.ResponseWriter, req *http.Reque
 
 // handleProxyEndpoint handles requests to /_wol/proxy - forwards to actual service
 func (w *WOLPlugin) handleProxyEndpoint(rw http.ResponseWriter, req *http.Request) {
-	// Create a new request without the /_wol/proxy prefix
-	newReq := req.Clone(req.Context())
-	newReq.URL.Path = strings.TrimPrefix(req.URL.Path, "/_wol/proxy")
-	if newReq.URL.Path == "" {
-		newReq.URL.Path = "/"
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: Proxy request received: %s %s\n", w.name, req.Method, req.URL.Path)
+	}
+	
+	// Strip /_wol/proxy prefix and modify the request path directly
+	originalPath := req.URL.Path
+	newPath := strings.TrimPrefix(req.URL.Path, "/_wol/proxy")
+	if newPath == "" {
+		newPath = "/"
+	}
+	
+	// Temporarily modify the request path
+	req.URL.Path = newPath
+	
+	if w.debug {
+		fmt.Printf("WOL Plugin [%s]: Proxying %s -> %s\n", w.name, originalPath, newPath)
 	}
 	
 	// Forward to the actual service
-	w.next.ServeHTTP(rw, newReq)
+	w.next.ServeHTTP(rw, req)
+	
+	// Restore original path (good practice)
+	req.URL.Path = originalPath
 }
 
 // performAutoWake handles the legacy auto-wake behavior when control page is disabled
